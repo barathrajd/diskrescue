@@ -16,7 +16,8 @@ function formatBytes(bytes: number): string {
 }
 
 function App() {
-  const { selectedImage, imageReview, message, chooseImage } = useDiskImageSelection();
+  const { selectedImage, imageReview, message, chooseImage, clearImage } = useDiskImageSelection();
+  const [activePage, setActivePage] = useState<'drives' | 'partitions' | 'recovery'>('drives');
   const [physicalSources, setPhysicalSources] = useState<PhysicalSource[] | null>(null);
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [selectedPartitionId, setSelectedPartitionId] = useState<string | null>(null);
@@ -34,6 +35,22 @@ function App() {
   const [deletedFileScanLoading, setDeletedFileScanLoading] = useState(false);
   const [fileCategory, setFileCategory] = useState<'photos' | 'videos' | 'all'>('all');
   const selectedSource = physicalSources?.find((source) => source.id === selectedSourceId) ?? null;
+  const selectedPartition = selectedSource?.partitions.find((partition) => partition.id === selectedPartitionId) ?? null;
+
+  function openSource(sourceId: string) {
+    setSelectedSourceId(sourceId);
+    setSelectedPartitionId(null);
+    clearImage();
+    setImageScan(null);
+    setLostImageScan(null);
+    setDeletedFileScan(null);
+    setActivePage('partitions');
+  }
+
+  function openPartition(partitionId: string) {
+    setSelectedPartitionId(partitionId);
+    setActivePage('recovery');
+  }
 
   async function refreshPhysicalSources() {
     setSourceMessage('');
@@ -166,18 +183,21 @@ function App() {
 
       <section className="workspace" id="top">
         <header className="topbar">
-          <div className="breadcrumb"><span>WORKSPACE</span><b>/</b> IMAGE RECOVERY</div>
+          <div className="breadcrumb"><span>WORKSPACE</span><b>/</b>{activePage !== 'drives' && <><button type="button" onClick={() => setActivePage('drives')}>EXTERNAL DRIVES</button><b>/</b></>}{activePage === 'recovery' ? 'RECOVERY' : activePage === 'partitions' ? 'PARTITIONS' : 'IMAGE RECOVERY'}</div>
           <div className="topbar-status"><span className="status-light" /> LOCAL SESSION</div>
         </header>
 
         <div className="content">
           <div className="hero-grid">
             <div className="hero-copy">
-              <div className="eyebrow"><span className="eyebrow-line" /> A CAREFUL WAY BACK</div>
-              <h1>Choose the external drive first.<br /><em>Keep it untouched.</em></h1>
+              <div className="eyebrow"><span className="eyebrow-line" /> {activePage === 'drives' ? 'A CAREFUL WAY BACK' : activePage === 'partitions' ? 'DRIVE / PARTITIONS' : 'PARTITION / RECOVERY'}</div>
+              <h1>{activePage === 'drives' ? <>Choose the external drive first.<br /><em>Keep it untouched.</em></> : activePage === 'partitions' ? <>Review its partitions.<br /><em>Keep the source safe.</em></> : <>Work from a copy.<br /><em>Recover with care.</em></>}</h1>
               <p className="hero-description">
-                Select an external source, then work from a disk image. Inspect NTFS metadata for
-                deleted names while keeping the source drive untouched.
+                {activePage === 'drives'
+                  ? 'Select an external source to load its partition list. Internal drives stay hidden.'
+                  : activePage === 'partitions'
+                    ? `Partition information for ${selectedSource?.model ?? selectedSource?.id ?? 'the selected drive'} comes from device metadata only.`
+                    : `Selected partition: ${selectedPartition?.name ?? selectedPartition?.id ?? 'unknown'}. Recovery operations are kept on this separate page.`}
               </p>
             </div>
             <div className="hero-index" aria-hidden="true">
@@ -187,16 +207,20 @@ function App() {
             </div>
           </div>
 
+          {activePage !== 'drives' && <button className="page-back-button" type="button" onClick={() => setActivePage(activePage === 'recovery' ? 'partitions' : 'drives')}>
+            ← {activePage === 'recovery' ? 'Back to partitions' : 'Back to external drives'}
+          </button>}
+
           <section className="safety-strip" aria-label="Safety requirements">
             <div className="safety-icon" aria-hidden="true">!</div>
             <div className="safety-copy">
               <strong>Do not mount, repair, or scan the affected drive.</strong>
-              <span>DiskRescue keeps internal drives locked. Use an existing disk image below; this preview cannot image a physical drive yet.</span>
+                <span>{activePage === 'drives' ? 'DiskRescue keeps internal drives locked. Choose an external drive to review its partition metadata.' : 'DiskRescue does not mount or write to the source. Recovery scanning uses an existing disk image in this preview.'}</span>
             </div>
             <span className="safety-tag">SOURCE PROTECTED</span>
           </section>
 
-          <section className="source-inventory" aria-labelledby="physical-sources-heading">
+          {activePage === 'drives' && <section className="source-inventory" aria-labelledby="physical-sources-heading">
             <div className="inventory-heading">
               <div>
                 <div className="panel-kicker">SOURCE / 01 · EXTERNAL ONLY</div>
@@ -215,7 +239,20 @@ function App() {
                 {physicalSources.map((source) => {
                   const isSelected = source.id === selectedSourceId;
                   return (
-                    <article className={`source-row${isSelected ? ' source-row-selected' : ''}`} key={source.id}>
+                    <article
+                      className={`source-row source-row-clickable${isSelected ? ' source-row-selected' : ''}`}
+                      key={source.id}
+                      role="button"
+                      tabIndex={0}
+                      aria-pressed={isSelected}
+                      onClick={() => openSource(source.id)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter' || event.key === ' ') {
+                          event.preventDefault();
+                          openSource(source.id);
+                        }
+                      }}
+                    >
                       <div className="source-device-icon" aria-hidden="true">▤</div>
                       <div className="source-main">
                         <strong>{source.model ?? 'Model unavailable'}</strong>
@@ -226,17 +263,7 @@ function App() {
                         <span>{source.eligibilityReason ?? 'External drive detected'}</span>
                         <small>Metadata only · imaging unavailable in this preview</small>
                       </div>
-                      <button
-                        className="source-select-button"
-                        type="button"
-                        aria-pressed={isSelected}
-                          onClick={() => {
-                            setSelectedSourceId(source.id);
-                            setSelectedPartitionId(null);
-                          }}
-                      >
-                        {isSelected ? 'Selected' : 'Select drive'}
-                      </button>
+                      <span className="source-open-label">{isSelected ? 'Open partitions ↗' : 'View partitions ↗'}</span>
                     </article>
                   );
                 })}
@@ -246,50 +273,62 @@ function App() {
               <p className="source-safety-note">Source selected for this session. Physical imaging is unavailable in this preview; no disk contents have been read.</p>
             )}
             <p className="source-safety-note">Do not mount or repair the original. Partition details below come from device metadata only.</p>
-          </section>
+          </section>}
 
+          {activePage === 'partitions' && selectedSource && (
+            <section className="source-inventory partition-page" aria-labelledby="partition-page-heading">
+              <div className="inventory-heading">
+                <div>
+                  <div className="panel-kicker">{selectedSource.id} · {formatBytes(selectedSource.capacityBytes)}</div>
+                  <h2 id="partition-page-heading">{selectedSource.model ?? 'External drive'}</h2>
+                  <p>Choose a partition to open its recovery workspace. This list is device metadata only.</p>
+                </div>
+                <span className="source-page-status">SOURCE READ-ONLY</span>
+              </div>
+              {selectedSource.partitions.length === 0 ? (
+                <p className="inventory-empty">No partitions were reported for this drive.</p>
+              ) : (
+                <div className="partition-list" aria-label="External drive partitions">
+                  {selectedSource.partitions.map((partition) => (
+                    <button className="partition-row partition-row-open" key={partition.id} type="button" onClick={() => openPartition(partition.id)}>
+                      <span className="partition-icon" aria-hidden="true">▤</span>
+                      <span className="partition-main"><strong>{partition.name ?? partition.id}</strong><small>{partition.id} · {partition.kind ?? 'Filesystem unknown'}</small></span>
+                      <span className="partition-size">{formatBytes(partition.sizeBytes)}</span>
+                      <span className="partition-mount">{partition.mountPoints.length ? `Mounted: ${partition.mountPoints.join(', ')}` : 'Not mounted'}</span>
+                      <span className="partition-open-arrow" aria-hidden="true">↗</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              <p className="partition-safety-note">Selecting a partition opens its workspace. Direct physical recovery scanning is not enabled in this build; use an existing image in the next screen.</p>
+            </section>
+          )}
+
+          {activePage === 'recovery' && <>
+          <div className="active-partition-banner">
+            <span className="partition-icon" aria-hidden="true">▤</span>
+            <span><small>SELECTED PARTITION</small><strong>{selectedPartition?.name ?? selectedPartition?.id}</strong><em>{selectedPartition?.id} · {selectedPartition?.kind ?? 'Filesystem needs identification'} · {formatBytes(selectedPartition?.sizeBytes ?? 0)}</em></span>
+            <button className="text-button" type="button" onClick={() => setActivePage('partitions')}>Change partition</button>
+          </div>
           <div className="work-grid">
             <section className="image-panel" aria-labelledby="image-heading">
               <div className="panel-heading">
                 <div>
-                  <div className="panel-kicker">PARTITIONS / 02 · DEVICE METADATA</div>
-                  <h2 id="image-heading">Partitions on the selected drive</h2>
+                  <div className="panel-kicker">RECOVERY INPUT / IMAGE COPY</div>
+                  <h2 id="image-heading">Open an image for this recovery workspace</h2>
                 </div>
                 <button className="browse-button inventory-refresh" onClick={chooseImage} type="button">
-                  {selectedImage ? 'Choose another image' : 'Use existing image'} <span aria-hidden="true">↗</span>
+                  {selectedImage ? 'Choose another image' : 'Browse images'} <span aria-hidden="true">↗</span>
                 </button>
               </div>
 
-              {!selectedSource ? (
-                <p className="inventory-empty">Select an external drive above to load its partition list.</p>
-              ) : selectedSource.partitions.length === 0 ? (
-                <p className="inventory-empty">No partitions were reported for {selectedSource.model ?? selectedSource.id}.</p>
+              {!selectedImage ? (
+                <button className="dropzone image-dropzone-compact" onClick={chooseImage} type="button">
+                  <span className="drop-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M16 21V6m0 0-6 6m6-6 6 6M6 20v6h20v-6" /></svg></span>
+                  <span className="drop-title">Select an existing disk image</span>
+                  <span className="drop-subtitle">Recovery reads an image copy; this build does not scan the physical partition.</span>
+                </button>
               ) : (
-                <div className="partition-list" aria-label="External drive partitions">
-                  {selectedSource.partitions.map((partition) => {
-                    const active = partition.id === selectedPartitionId;
-                    return (
-                      <button
-                        className={`partition-row${active ? ' partition-row-selected' : ''}`}
-                        key={partition.id}
-                        type="button"
-                        aria-pressed={active}
-                        onClick={() => setSelectedPartitionId(partition.id)}
-                      >
-                        <span className="partition-icon" aria-hidden="true">▤</span>
-                        <span className="partition-main"><strong>{partition.name ?? partition.id}</strong><small>{partition.id} · {partition.kind ?? 'Filesystem unknown'}</small></span>
-                        <span className="partition-size">{formatBytes(partition.sizeBytes)}</span>
-                        <span className="partition-mount">{partition.mountPoints.length ? `Mounted: ${partition.mountPoints.join(', ')}` : 'Not mounted'}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              )}
-
-              {selectedPartitionId && (
-                <p className="partition-safety-note">Partition selected. This build lists partition metadata here; recovery scans still require an existing image. Selecting a partition does not read or mount it.</p>
-              )}
-              {selectedImage && (
                 <div className="selected-file selected-image-inline" aria-live="polite">
                   <div className="file-emblem" aria-hidden="true">IMG</div>
                   <div className="file-details">
@@ -402,21 +441,21 @@ function App() {
 
             <aside className="workflow-panel" aria-labelledby="workflow-heading">
               <div className="panel-kicker">RECOVERY PATH</div>
-              <h2 id="workflow-heading">Three careful steps</h2>
+              <h2 id="workflow-heading">Recovery workspace</h2>
               <ol className="workflow-list">
                 <li className="workflow-current">
                   <span className="step-number">01</span>
-                  <span className="step-copy"><strong>Choose an external drive</strong><small>Internal drives stay locked</small></span>
+                  <span className="step-copy"><strong>Choose a partition</strong><small>{selectedPartition?.id ?? 'Partition selected'}</small></span>
                   <span className="step-state">NOW</span>
                 </li>
                 <li>
                   <span className="step-number">02</span>
-                  <span className="step-copy"><strong>Open a disk image</strong><small>Physical imaging is not ready yet</small></span>
+                  <span className="step-copy"><strong>Open its disk image</strong><small>Physical scanning is not enabled</small></span>
                   <span className="step-state step-state-next">NEXT</span>
                 </li>
                 <li>
                   <span className="step-number">03</span>
-                  <span className="step-copy"><strong>Recover photos and videos</strong><small>File recovery is still in development</small></span>
+                  <span className="step-copy"><strong>Review deleted names</strong><small>Export is not available yet</small></span>
                   <span className="step-state step-state-later">LATER</span>
                 </li>
               </ol>
@@ -509,6 +548,7 @@ function App() {
               </div>
             </div>
           </section>
+          </>}
 
           <section className="build-note" aria-label="Preview build status">
             <span className="build-note-mark" aria-hidden="true">i</span>

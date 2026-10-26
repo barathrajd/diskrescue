@@ -221,6 +221,8 @@ and safe export.
      unknown drives and omit any source-mount action.
    - [x] Load partition identifiers, names, sizes, filesystem labels, and
      mount state from OS device metadata when an external drive is selected.
+   - [x] Separate drive selection, partition selection, and partition
+     recovery into navigable desktop pages with a back path.
    - [x] Add a photo/video results workspace with type/path navigation and a
      truthful empty state until file-level recovery data is available.
    - [ ] Show scan phase, bytes checked, total bytes, and volume/file counts;

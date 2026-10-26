@@ -113,6 +113,12 @@ export function useDiskImageSelection() {
   const [imageReview, setImageReview] = useState<ImageReview | null>(null);
   const [message, setMessage] = useState('');
 
+  function clearImage() {
+    setSelectedImage(null);
+    setImageReview(null);
+    setMessage('');
+  }
+
   async function chooseImage() {
     setMessage('');
     try {
@@ -131,5 +137,5 @@ export function useDiskImageSelection() {
     }
   }
 
-  return { selectedImage, imageReview, message, chooseImage };
+  return { selectedImage, imageReview, message, chooseImage, clearImage };
 }
