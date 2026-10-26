@@ -7,3 +7,4 @@ edition.workspace = true
 disk-reader = { path = "../disk-reader" }
 partition-parser = { path = "../partition-parser" }
 partition-hunter = { path = "../partition-hunter" }
+fs-ntfs = { path = "../fs-ntfs" }

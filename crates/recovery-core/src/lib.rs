@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 use disk_reader::{ImageReader, ReadAt};
+use fs_ntfs::NtfsFileRecord;
 use partition_hunter::{FileSystemCandidate, identify_filesystem};
 use partition_parser::{Gpt, Mbr, parse_backup_gpt, parse_gpt, parse_mbr};
 use std::io;
@@ -8,7 +9,9 @@ use std::path::Path;
 
 #[cfg(test)]
 mod tests {
-    use super::{RecoveryScan, inspect_image, scan_image, search_lost_filesystems};
+    use super::{
+        RecoveryScan, inspect_image, scan_image, scan_ntfs_deleted_files, search_lost_filesystems,
+    };
     use partition_hunter::FileSystemKind;
     use std::fs;
     use std::path::PathBuf;
@@ -164,6 +167,20 @@ mod tests {
     }
 
     #[test]
+    fn scans_deleted_ntfs_entries_from_a_selected_partition_in_the_image() {
+        let path = temporary_image_path();
+        let image = synthetic_ntfs_image_with_deleted_file();
+        fs::write(&path, image).unwrap();
+
+        let entries = scan_ntfs_deleted_files(&path, 0, 16 * 512).unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].record_number, 1);
+        assert_eq!(entries[0].name.as_deref(), Some("lost.mp4"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn lost_filesystem_search_returns_partial_results_when_cancelled() {
         let path = temporary_image_path();
         let mut image = vec![0_u8; 64 * 1024];
@@ -192,6 +209,66 @@ mod tests {
             }
         }
         !crc
+    }
+
+    fn synthetic_ntfs_image_with_deleted_file() -> Vec<u8> {
+        let mut image = vec![0_u8; 16 * 512];
+        let boot = &mut image[..512];
+        boot[3..11].copy_from_slice(b"NTFS    ");
+        boot[11..13].copy_from_slice(&512_u16.to_le_bytes());
+        boot[13] = 1;
+        boot[40..48].copy_from_slice(&16_u64.to_le_bytes());
+        boot[48..56].copy_from_slice(&2_u64.to_le_bytes());
+        boot[56..64].copy_from_slice(&3_u64.to_le_bytes());
+        boot[64] = (-10_i8) as u8;
+        boot[510..512].copy_from_slice(&[0x55, 0xaa]);
+
+        let mut base = synthetic_file_record("$MFT", 5, true);
+        base[56 + 0..56 + 4].copy_from_slice(&0x80_u32.to_le_bytes());
+        base[56 + 4..56 + 8].copy_from_slice(&80_u32.to_le_bytes());
+        base[56 + 8] = 1;
+        base[56 + 32..56 + 34].copy_from_slice(&64_u16.to_le_bytes());
+        base[56 + 48..56 + 56].copy_from_slice(&2048_u64.to_le_bytes());
+        base[56 + 64..56 + 68].copy_from_slice(&[0x11, 4, 2, 0]);
+        base[24..28].copy_from_slice(&140_u32.to_le_bytes());
+        base[136..140].copy_from_slice(&u32::MAX.to_le_bytes());
+        image[2 * 512..2 * 512 + 1024].copy_from_slice(&base);
+        let deleted = synthetic_file_record("lost.mp4", 5, false);
+        image[4 * 512..4 * 512 + 1024].copy_from_slice(&deleted);
+        image
+    }
+
+    fn synthetic_file_record(name: &str, parent_record: u64, in_use: bool) -> [u8; 1024] {
+        let mut record = [0_u8; 1024];
+        record[0..4].copy_from_slice(b"FILE");
+        record[4..6].copy_from_slice(&48_u16.to_le_bytes());
+        record[6..8].copy_from_slice(&3_u16.to_le_bytes());
+        record[48..50].copy_from_slice(&0xaaaa_u16.to_le_bytes());
+        record[50..52].copy_from_slice(&0x1111_u16.to_le_bytes());
+        record[52..54].copy_from_slice(&0x2222_u16.to_le_bytes());
+        record[16..18].copy_from_slice(&7_u16.to_le_bytes());
+        record[20..22].copy_from_slice(&56_u16.to_le_bytes());
+        record[22..24].copy_from_slice(&(u16::from(in_use)).to_le_bytes());
+        record[24..28].copy_from_slice(&172_u32.to_le_bytes());
+        record[28..32].copy_from_slice(&1024_u32.to_le_bytes());
+        let attribute = &mut record[56..168];
+        attribute[0..4].copy_from_slice(&0x30_u32.to_le_bytes());
+        attribute[4..8].copy_from_slice(&112_u32.to_le_bytes());
+        attribute[16..20].copy_from_slice(&84_u32.to_le_bytes());
+        attribute[20..22].copy_from_slice(&24_u16.to_le_bytes());
+        let value = &mut attribute[24..108];
+        value[0..8].copy_from_slice(&parent_record.to_le_bytes());
+        let utf16_name = name.encode_utf16().collect::<Vec<_>>();
+        value[64] = utf16_name.len() as u8;
+        value[65] = 1;
+        for (index, character) in utf16_name.iter().enumerate() {
+            let offset = 66 + index * 2;
+            value[offset..offset + 2].copy_from_slice(&character.to_le_bytes());
+        }
+        record[168..172].copy_from_slice(&u32::MAX.to_le_bytes());
+        record[510..512].copy_from_slice(&0xaaaa_u16.to_le_bytes());
+        record[1022..1024].copy_from_slice(&0xaaaa_u16.to_le_bytes());
+        record
     }
 
     fn temporary_image_path() -> PathBuf {
@@ -236,6 +313,18 @@ pub struct LostFilesystemScan {
     pub scanned_bytes: u64,
     pub complete: bool,
     pub candidates: Vec<PartitionFinding>,
+}
+
+/// Lists deleted NTFS entries from a selected partition in a disk image.
+/// The image is opened read-only; offsets and lengths are relative to the
+/// whole image and are revalidated by the NTFS reader.
+pub fn scan_ntfs_deleted_files(
+    path: impl AsRef<Path>,
+    partition_offset_bytes: u64,
+    partition_length_bytes: u64,
+) -> io::Result<Vec<NtfsFileRecord>> {
+    let image = ImageReader::open(path)?;
+    fs_ntfs::scan_deleted_file_records(&image, partition_offset_bytes, partition_length_bytes)
 }
 
 pub fn inspect_image(path: impl AsRef<Path>) -> io::Result<ImageInspection> {
