@@ -200,7 +200,10 @@ and safe export.
      metadata with parent references.
    - [x] Decode bounded, signed NTFS data runlists for nonresident stream
      extents.
-   - [ ] Read the MFT and list deleted entries from parsed records.
+   - [x] Parse bounded MFT record windows and list deleted records while
+     ignoring unused slots.
+   - [ ] Map the MFT data stream from its runlist, read records from the image,
+     and list deleted entries end to end.
    - [ ] Resolve surviving parent paths and recover supported data streams to
      a separate destination.
 7. **Carve common file formats.** Add bounded scanners and format validators

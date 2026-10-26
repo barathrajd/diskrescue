@@ -64,6 +64,36 @@ pub struct NtfsFileRecord {
     pub data_size_bytes: Option<u64>,
 }
 
+/// Parses a bounded sequence of fixed-size MFT records and returns entries
+/// whose in-use flag is clear. Non-FILE slots are treated as unused MFT space.
+pub fn parse_deleted_file_records(
+    bytes: &[u8],
+    record_size_bytes: usize,
+    bytes_per_sector: u16,
+) -> Result<Vec<NtfsFileRecord>, NtfsError> {
+    const MAX_WINDOW_BYTES: usize = 64 * 1024 * 1024;
+    if !(512..=1024 * 1024).contains(&record_size_bytes)
+        || !matches!(bytes_per_sector, 512 | 1024 | 2048 | 4096)
+        || !record_size_bytes.is_multiple_of(usize::from(bytes_per_sector))
+        || bytes.len() > MAX_WINDOW_BYTES
+        || bytes.len() % record_size_bytes != 0
+    {
+        return Err(NtfsError::InvalidFileRecordSize);
+    }
+    let mut deleted = Vec::new();
+    for (index, record) in bytes.chunks_exact(record_size_bytes).enumerate() {
+        if record.get(0..4) != Some(b"FILE") {
+            continue;
+        }
+        let record_number = u64::try_from(index).map_err(|_| NtfsError::ArithmeticOverflow)?;
+        let parsed = parse_file_record(record, record_number, bytes_per_sector)?;
+        if !parsed.in_use {
+            deleted.push(parsed);
+        }
+    }
+    Ok(deleted)
+}
+
 /// Decodes a bounded NTFS nonresident data runlist into `(starting_cluster,
 /// cluster_count)` extents. Sparse runs are rejected because this initial
 /// reader does not yet map sparse streams.
@@ -350,7 +380,7 @@ fn read_u64(bytes: &[u8], offset: usize) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{NtfsBootSector, parse_boot_sector, parse_file_record};
+    use super::{NtfsBootSector, parse_boot_sector, parse_deleted_file_records, parse_file_record};
 
     #[test]
     fn parses_ntfs_geometry_and_mft_locations_from_a_valid_boot_sector() {
@@ -404,6 +434,26 @@ mod tests {
         assert!(!parsed.is_directory);
         assert_eq!(parsed.name.as_deref(), Some("photo.jpg"));
         assert_eq!(parsed.parent_record_number, Some(5));
+    }
+
+    #[test]
+    fn lists_only_deleted_file_records_from_a_bounded_mft_window() {
+        let mut mft = Vec::new();
+        mft.extend_from_slice(&synthetic_file_record("live.jpg", 5, true));
+        mft.extend_from_slice(&synthetic_file_record("lost.mp4", 5, false));
+        mft.extend_from_slice(&[0_u8; 1024]);
+
+        let entries = parse_deleted_file_records(&mft, 1024, 512).unwrap();
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].record_number, 1);
+        assert_eq!(entries[0].name.as_deref(), Some("lost.mp4"));
+    }
+
+    #[test]
+    fn rejects_partial_or_invalid_mft_record_windows() {
+        assert!(parse_deleted_file_records(&[0; 1025], 1024, 512).is_err());
+        assert!(parse_deleted_file_records(&[0; 1024], 513, 512).is_err());
     }
 
     #[test]
