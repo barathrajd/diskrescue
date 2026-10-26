@@ -1,6 +1,9 @@
 #![forbid(unsafe_code)]
 
 use std::fmt;
+use std::io;
+
+use disk_reader::ReadAt;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NtfsError {
@@ -93,6 +96,121 @@ pub fn parse_deleted_file_records(
         }
     }
     Ok(deleted)
+}
+
+/// Reads record zero and its fragmented `$MFT` data stream from a bounded,
+/// read-only image, then lists deleted records from that stream.
+pub fn scan_deleted_file_records<R: ReadAt>(
+    image: &R,
+    partition_offset_bytes: u64,
+    partition_length_bytes: u64,
+) -> io::Result<Vec<NtfsFileRecord>> {
+    const MAX_MFT_BYTES: u64 = 64 * 1024 * 1024;
+    let partition_end = partition_offset_bytes
+        .checked_add(partition_length_bytes)
+        .filter(|end| *end <= image.len())
+        .ok_or_else(|| invalid_image("NTFS partition exceeds the image"))?;
+    let mut boot_bytes = [0_u8; 512];
+    read_partition_bytes(
+        image,
+        partition_offset_bytes,
+        partition_end,
+        0,
+        &mut boot_bytes,
+    )?;
+    let boot = parse_boot_sector(&boot_bytes, partition_length_bytes)
+        .map_err(|error| invalid_image(error.to_string()))?;
+    let cluster_size = u64::from(boot.cluster_size_bytes);
+    let volume_clusters = boot.total_sectors / u64::from(boot.sectors_per_cluster);
+    let mft_offset = boot
+        .mft_cluster
+        .checked_mul(cluster_size)
+        .ok_or_else(|| invalid_image("MFT offset overflows"))?;
+    let record_size = usize::try_from(boot.file_record_size_bytes)
+        .map_err(|_| invalid_image("MFT record size is unsupported"))?;
+    let mut base_record = vec![0_u8; record_size];
+    read_partition_bytes(
+        image,
+        partition_offset_bytes,
+        partition_end,
+        mft_offset,
+        &mut base_record,
+    )?;
+    let base = parse_file_record(&base_record, 0, boot.bytes_per_sector)
+        .map_err(|error| invalid_image(error.to_string()))?;
+    let stream_size = base
+        .data_size_bytes
+        .filter(|size| *size > 0 && *size <= MAX_MFT_BYTES && *size % record_size as u64 == 0)
+        .ok_or_else(|| invalid_image("MFT data stream size is unsupported"))?;
+    if base.data_runs.is_empty() {
+        return Err(invalid_image("MFT data stream has no physical extents"));
+    }
+
+    let mut stream =
+        vec![0_u8; usize::try_from(stream_size).map_err(|_| invalid_image("MFT is too large"))?];
+    let mut stream_cursor = 0_usize;
+    for (starting_cluster, cluster_count) in base.data_runs {
+        if starting_cluster
+            .checked_add(cluster_count)
+            .filter(|end| *end <= volume_clusters)
+            .is_none()
+        {
+            return Err(invalid_image("MFT extent exceeds the NTFS volume"));
+        }
+        let run_bytes = cluster_count
+            .checked_mul(cluster_size)
+            .ok_or_else(|| invalid_image("MFT extent size overflows"))?;
+        let remaining = stream.len().saturating_sub(stream_cursor);
+        let copy_bytes = usize::try_from(run_bytes.min(remaining as u64))
+            .map_err(|_| invalid_image("MFT extent is too large"))?;
+        if copy_bytes == 0 {
+            break;
+        }
+        let relative_offset = starting_cluster
+            .checked_mul(cluster_size)
+            .ok_or_else(|| invalid_image("MFT extent offset overflows"))?;
+        read_partition_bytes(
+            image,
+            partition_offset_bytes,
+            partition_end,
+            relative_offset,
+            &mut stream[stream_cursor..stream_cursor + copy_bytes],
+        )?;
+        stream_cursor = stream_cursor
+            .checked_add(copy_bytes)
+            .ok_or_else(|| invalid_image("MFT stream offset overflows"))?;
+    }
+    if stream_cursor != stream.len() {
+        return Err(invalid_image(
+            "MFT extents do not cover the declared stream",
+        ));
+    }
+    parse_deleted_file_records(&stream, record_size, boot.bytes_per_sector)
+        .map_err(|error| invalid_image(error.to_string()))
+}
+
+fn read_partition_bytes<R: ReadAt>(
+    image: &R,
+    partition_start: u64,
+    partition_end: u64,
+    relative_offset: u64,
+    buffer: &mut [u8],
+) -> io::Result<()> {
+    let absolute_offset = partition_start
+        .checked_add(relative_offset)
+        .ok_or_else(|| invalid_image("partition read offset overflows"))?;
+    if absolute_offset
+        .checked_add(buffer.len() as u64)
+        .filter(|end| *end <= partition_end)
+        .is_none()
+    {
+        return Err(invalid_image("partition read exceeds its bounds"));
+    }
+    image.read_exact_at(absolute_offset, buffer)
+}
+
+fn invalid_image(message: impl Into<String>) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, message.into())
 }
 
 /// Decodes a bounded NTFS nonresident data runlist into `(starting_cluster,
@@ -454,6 +572,27 @@ mod tests {
     }
 
     #[test]
+    fn reads_deleted_entries_from_a_fragmented_mft_in_an_image() {
+        let image = synthetic_ntfs_image_with_fragmented_mft();
+        let reader = MemoryReader(image);
+
+        let deleted = super::scan_deleted_file_records(&reader, 0, 16 * 512).unwrap();
+
+        assert_eq!(deleted.len(), 1);
+        assert_eq!(deleted[0].record_number, 2);
+        assert_eq!(deleted[0].name.as_deref(), Some("lost.mp4"));
+    }
+
+    #[test]
+    fn rejects_mft_runs_that_point_outside_the_ntfs_volume() {
+        let mut image = synthetic_ntfs_image_with_fragmented_mft();
+        image[2 * 512 + 56 + 64..2 * 512 + 56 + 71].copy_from_slice(&[0x11, 2, 250, 0x11, 6, 8, 0]);
+        let reader = MemoryReader(image);
+
+        assert!(super::scan_deleted_file_records(&reader, 0, 16 * 512).is_err());
+    }
+
+    #[test]
     fn lists_only_deleted_file_records_from_a_bounded_mft_window() {
         let mut mft = Vec::new();
         mft.extend_from_slice(&synthetic_file_record("live.jpg", 5, true));
@@ -502,6 +641,7 @@ mod tests {
         record[52..54].copy_from_slice(&0x2222_u16.to_le_bytes());
         record[16..18].copy_from_slice(&7_u16.to_le_bytes());
         record[20..22].copy_from_slice(&56_u16.to_le_bytes());
+        record[22..24].copy_from_slice(&1_u16.to_le_bytes());
         record[22..24].copy_from_slice(&(u16::from(in_use)).to_le_bytes());
         record[24..28].copy_from_slice(&172_u32.to_le_bytes());
         record[28..32].copy_from_slice(&1024_u32.to_le_bytes());
@@ -535,6 +675,7 @@ mod tests {
         record[50..52].copy_from_slice(&0x1111_u16.to_le_bytes());
         record[52..54].copy_from_slice(&0x2222_u16.to_le_bytes());
         record[20..22].copy_from_slice(&56_u16.to_le_bytes());
+        record[22..24].copy_from_slice(&1_u16.to_le_bytes());
         record[24..28].copy_from_slice(&140_u32.to_le_bytes());
         record[28..32].copy_from_slice(&1024_u32.to_le_bytes());
         let attribute = &mut record[56..136];
@@ -549,5 +690,47 @@ mod tests {
         record[510..512].copy_from_slice(&0xaaaa_u16.to_le_bytes());
         record[1022..1024].copy_from_slice(&0xaaaa_u16.to_le_bytes());
         record
+    }
+
+    struct MemoryReader(Vec<u8>);
+
+    impl disk_reader::ReadAt for MemoryReader {
+        fn len(&self) -> u64 {
+            self.0.len() as u64
+        }
+
+        fn read_exact_at(&self, offset: u64, buffer: &mut [u8]) -> std::io::Result<()> {
+            let start = usize::try_from(offset).unwrap();
+            let end = start.checked_add(buffer.len()).unwrap();
+            if end > self.0.len() {
+                return Err(std::io::Error::from(std::io::ErrorKind::UnexpectedEof));
+            }
+            buffer.copy_from_slice(&self.0[start..end]);
+            Ok(())
+        }
+    }
+
+    fn synthetic_ntfs_image_with_fragmented_mft() -> Vec<u8> {
+        let mut image = vec![0_u8; 16 * 512];
+        let boot = &mut image[..512];
+        boot[3..11].copy_from_slice(b"NTFS    ");
+        boot[11..13].copy_from_slice(&512_u16.to_le_bytes());
+        boot[13] = 1;
+        boot[40..48].copy_from_slice(&16_u64.to_le_bytes());
+        boot[48..56].copy_from_slice(&2_u64.to_le_bytes());
+        boot[56..64].copy_from_slice(&3_u64.to_le_bytes());
+        boot[64] = (-10_i8) as u8;
+        boot[510..512].copy_from_slice(&[0x55, 0xaa]);
+
+        let mut base = synthetic_mft_base_record();
+        base[24..28].copy_from_slice(&140_u32.to_le_bytes());
+        base[56 + 48..56 + 56].copy_from_slice(&4096_u64.to_le_bytes());
+        base[56 + 64..56 + 71].copy_from_slice(&[0x11, 2, 2, 0x11, 6, 8, 0]);
+        image[2 * 512..2 * 512 + 1024].copy_from_slice(&base);
+        let live = synthetic_file_record("live.jpg", 5, true);
+        let deleted = synthetic_file_record("lost.mp4", 5, false);
+        image[10 * 512..10 * 512 + 1024].copy_from_slice(&live);
+        image[12 * 512..12 * 512 + 1024].copy_from_slice(&deleted);
+        image
     }
 }

@@ -204,8 +204,8 @@ and safe export.
      ignoring unused slots.
    - [x] Parse the unnamed nonresident `$DATA` runlist and size from an MFT
      base record.
-   - [ ] Map MFT extents to bounded image reads and list deleted entries end
-     to end.
+   - [x] Map fragmented MFT extents to bounded image reads and list deleted
+     entries end to end, rejecting extents outside the volume.
    - [ ] Resolve surviving parent paths and recover supported data streams to
      a separate destination.
 7. **Carve common file formats.** Add bounded scanners and format validators
