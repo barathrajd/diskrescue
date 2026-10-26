@@ -1,11 +1,4 @@
-import { useRef, useState } from 'react';
-
-type SelectedImage = {
-  file: File;
-  name: string;
-};
-
-const imageExtensions = /\.(img|dd|raw|dmg|iso)$/i;
+import { useDiskImageSelection } from './hooks/useDiskImageSelection';
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 bytes';
@@ -21,26 +14,7 @@ function formatBytes(bytes: number): string {
 }
 
 function App() {
-  const inputRef = useRef<HTMLInputElement>(null);
-  const [selectedImage, setSelectedImage] = useState<SelectedImage | null>(null);
-  const [message, setMessage] = useState('');
-
-  function handleSelection(file?: File) {
-    setMessage('');
-    if (!file) return;
-    if (!imageExtensions.test(file.name)) {
-      setSelectedImage(null);
-      setMessage('Choose a raw disk image ending in .img, .dd, .raw, .dmg, or .iso.');
-      return;
-    }
-    setSelectedImage({ file, name: file.name });
-  }
-
-  function clearSelection() {
-    setSelectedImage(null);
-    setMessage('');
-    if (inputRef.current) inputRef.current.value = '';
-  }
+  const { selectedImage, imageReview, message, chooseImage } = useDiskImageSelection();
 
   return (
     <main className="app-shell">
@@ -110,7 +84,7 @@ function App() {
               </div>
 
               {!selectedImage ? (
-                <label className="dropzone" htmlFor="image-file">
+                <button className="dropzone" onClick={chooseImage} type="button">
                   <span className="drop-icon" aria-hidden="true">
                     <svg viewBox="0 0 32 32" fill="none">
                       <path d="M16 21V6m0 0-6 6m6-6 6 6M6 20v6h20v-6" />
@@ -119,26 +93,26 @@ function App() {
                   <span className="drop-title">Select an image file</span>
                   <span className="drop-subtitle">Raw disk images · IMG, DD, RAW, DMG, ISO</span>
                   <span className="browse-button">Browse files <span aria-hidden="true">↗</span></span>
-                  <input
-                    ref={inputRef}
-                    id="image-file"
-                    type="file"
-                    accept=".img,.dd,.raw,.dmg,.iso,application/octet-stream"
-                    onChange={(event) => handleSelection(event.currentTarget.files?.[0])}
-                  />
-                </label>
+                </button>
               ) : (
                 <div className="selected-file" aria-live="polite">
                   <div className="file-emblem" aria-hidden="true">IMG</div>
                   <div className="file-details">
                     <strong title={selectedImage.name}>{selectedImage.name}</strong>
-                    <span>{formatBytes(selectedImage.file.size)} <i /> Selected locally</span>
+                    <span>{imageReview ? formatBytes(imageReview.imageBytes) : 'Selected locally'} <i /> Read-only inspection</span>
                   </div>
-                  <button className="text-button" onClick={clearSelection} type="button">Remove</button>
+                  <button className="text-button" onClick={chooseImage} type="button">Choose another</button>
                 </div>
               )}
 
               {message && <p className="input-message" role="alert">{message}</p>}
+
+              {imageReview && (
+                <div className="image-review" aria-live="polite">
+                  <div><span>MBR</span><strong>{imageReview.mbrStatus}</strong><small>{imageReview.mbrPartitionCount} partitions</small></div>
+                  <div><span>GPT</span><strong>{imageReview.gptStatus}</strong><small>{imageReview.gptPartitionCount} partitions</small></div>
+                </div>
+              )}
 
               <div className="image-panel-footer">
                 <span><span className="tiny-check">✓</span> File stays on this device</span>
@@ -175,7 +149,7 @@ function App() {
 
           <section className="build-note" aria-label="Preview build status">
             <span className="build-note-mark" aria-hidden="true">i</span>
-            <p><strong>Preview build.</strong> Image selection is ready. Partition inspection and file recovery are still in development.</p>
+            <p><strong>Preview build.</strong> Image selection and basic MBR/GPT inspection are ready. Physical imaging and file recovery are still in development.</p>
             <span className="build-note-id">MILESTONE 01 / FOUNDATION</span>
           </section>
         </div>

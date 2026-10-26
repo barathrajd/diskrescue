@@ -103,15 +103,14 @@ h1 em { color: #b7c4b7; font-weight: 400; }
 h2 { margin-bottom: 0; color: var(--paper); font-family: Georgia, serif; font-size: 21px; font-weight: 400; letter-spacing: -.03em; }
 .panel-status { display: flex; align-items: center; gap: 7px; padding-top: 4px; color: #859287; font-size: 8px; white-space: nowrap; }
 .panel-status span { width: 5px; height: 5px; }
-.dropzone { display: flex; min-height: 169px; flex: 1; flex-direction: column; align-items: center; justify-content: center; border: 1px dashed #455247; background: rgb(13 19 15 / 43%); cursor: pointer; transition: border-color 150ms ease, background 150ms ease; }
-.dropzone:hover, .dropzone:focus-within { border-color: var(--acid); background: rgb(28 40 30 / 72%); }
+.dropzone { display: flex; width: 100%; min-height: 169px; flex: 1; flex-direction: column; align-items: center; justify-content: center; padding: 16px; border: 1px dashed #455247; background: rgb(13 19 15 / 43%); color: inherit; font: inherit; text-align: center; cursor: pointer; transition: border-color 150ms ease, background 150ms ease; }
+.dropzone:hover, .dropzone:focus-visible { border-color: var(--acid); background: rgb(28 40 30 / 72%); }
 .drop-icon { display: grid; width: 34px; height: 34px; place-items: center; margin-bottom: 9px; border: 1px solid #3e4b40; border-radius: 50%; color: var(--acid); }
 .drop-icon svg { width: 17px; height: 17px; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.4; }
 .drop-title { color: #e2e8e0; font-size: 12px; font-weight: 550; }
 .drop-subtitle { margin-top: 5px; color: var(--quiet); font-size: 9px; }
 .browse-button { margin-top: 13px; padding: 7px 12px; border: 1px solid #49584a; color: var(--acid); font-family: "SFMono-Regular", Consolas, monospace; font-size: 9px; letter-spacing: .02em; }
 .browse-button span { padding-left: 7px; }
-.dropzone input { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; clip-path: inset(50%); }
 .image-panel-footer { display: flex; justify-content: space-between; margin: 17px -24px 0; padding: 13px 24px; border-top: 1px solid #29332c; color: var(--quiet); font-family: "SFMono-Regular", Consolas, monospace; font-size: 8px; letter-spacing: .035em; }
 .image-panel-footer > span:first-child { display: flex; align-items: center; gap: 6px; }
 .tiny-check { color: var(--acid); font-size: 11px; }
@@ -124,6 +123,11 @@ h2 { margin-bottom: 0; color: var(--paper); font-family: Georgia, serif; font-si
 .text-button { margin-left: auto; padding: 6px; border: 0; background: transparent; color: var(--muted); font-size: 9px; cursor: pointer; }
 .text-button:hover { color: var(--paper); }
 .input-message { margin: 9px 0 0; color: #ffc27e; font-size: 10px; }
+.image-review { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 12px; }
+.image-review > div { display: grid; gap: 4px; padding: 10px; border: 1px solid #334036; background: rgb(13 19 15 / 40%); }
+.image-review span { color: var(--quiet); font-family: "SFMono-Regular", Consolas, monospace; font-size: 8px; letter-spacing: .08em; }
+.image-review strong { color: #dce3db; font-size: 10px; font-weight: 550; }
+.image-review small { color: var(--muted); font-size: 8px; }
 
 .workflow-panel { padding: 24px 21px 18px; }
 .workflow-panel h2 { margin-bottom: 19px; font-size: 19px; }
