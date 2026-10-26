@@ -14,6 +14,27 @@ function formatBytes(bytes: number): string {
   })} ${units[unitIndex]}`;
 }
 
+function describeScanError(error: unknown, partitionKind: string | null | undefined): string {
+  const detail = typeof error === 'string'
+    ? error
+    : error instanceof Error
+      ? error.message
+      : error && typeof error === 'object' && 'message' in error && typeof error.message === 'string'
+        ? error.message
+        : String(error);
+
+  if (/permission denied|os error 13/i.test(detail)) {
+    const kindNote = partitionKind
+      ? ` Disk Utility labels this partition “${partitionKind}”; the current metadata scanner supports NTFS only.`
+      : '';
+    return `macOS denied raw-drive access. This build has no privileged read-only helper, so it cannot scan the physical disk yet.${kindNote}`;
+  }
+  if (/ntfs boot-sector signature is invalid/i.test(detail)) {
+    return 'This partition is not NTFS. The current deleted-name scanner supports NTFS only; photo and video carving is not implemented yet.';
+  }
+  return detail || 'The selected partition could not be scanned.';
+}
+
 function App() {
   const [activePage, setActivePage] = useState<'drives' | 'partitions' | 'recovery'>('drives');
   const [physicalSources, setPhysicalSources] = useState<PhysicalSource[] | null>(null);
@@ -89,7 +110,7 @@ function App() {
       setDeletedFileScan({ sourceId: selectedSource.id, partitionId: selectedPartition.id, entries });
     } catch (error) {
       setDeletedFileScan(null);
-      setDeletedFileScanMessage(error instanceof Error ? error.message : 'Could not read deleted NTFS entries.');
+      setDeletedFileScanMessage(describeScanError(error, selectedPartition.kind));
     } finally {
       setDeletedFileScanLoading(false);
     }
@@ -353,7 +374,6 @@ function App() {
                   </div>
                   <button className="filter-button" type="button" disabled>Filter <span aria-hidden="true">⌄</span></button>
                 </div>
-                {deletedFileScanMessage && <p className="input-message" role="alert">{deletedFileScanMessage}</p>}
                 {visibleDeletedFileScan ? (
                   <div className="deleted-file-list" aria-live="polite">
                     {filteredDeletedEntries.length === 0 ? (
