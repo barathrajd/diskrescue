@@ -1,5 +1,6 @@
 #![forbid(unsafe_code)]
 
+use disk_reader::ReadOnlyDeviceReader;
 use serde::Serialize;
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -30,6 +31,7 @@ struct PhysicalPartition {
     id: String,
     name: Option<String>,
     size_bytes: u64,
+    offset_bytes: Option<u64>,
     kind: Option<String>,
     mount_points: Vec<String>,
 }
@@ -43,8 +45,6 @@ fn source_imaging_blocker(source: &PhysicalSource) -> Option<&'static str> {
         Some("Device identifier unavailable")
     } else if source.model.as_deref().is_none_or(str::is_empty) {
         Some("Model unavailable")
-    } else if source.serial.as_deref().is_none_or(str::is_empty) {
-        Some("Serial unavailable")
     } else if source.capacity_bytes == 0 {
         Some("Capacity unavailable")
     } else if !source.system_state_known {
@@ -170,6 +170,10 @@ fn linux_partitions(disk: &serde_json::Value) -> Vec<PhysicalPartition> {
                     .get("size")
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0),
+                offset_bytes: child
+                    .get("start")
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|sectors| sectors.checked_mul(512)),
                 kind: json_string(child, "fstype"),
                 mount_points,
             })
@@ -350,6 +354,7 @@ fn windows_partitions(disk: &serde_json::Value, disk_number: u64) -> Vec<Physica
                     .get("Size")
                     .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0),
+                offset_bytes: partition.get("Offset").and_then(serde_json::Value::as_u64),
                 kind: json_string(partition, "Type"),
                 mount_points,
             })
@@ -382,7 +387,7 @@ fn list_linux_sources() -> Result<Vec<PhysicalSource>, String> {
             "--bytes",
             "--tree",
             "--output",
-            "NAME,PATH,TYPE,SIZE,MODEL,SERIAL,MOUNTPOINTS,RM,TRAN,FSTYPE,LABEL,PARTLABEL",
+            "NAME,PATH,TYPE,SIZE,MODEL,SERIAL,MOUNTPOINTS,RM,TRAN,FSTYPE,LABEL,PARTLABEL,START",
         ])
         .output()
         .map_err(|_| "Could not start lsblk to list physical disks".to_owned())?;
@@ -396,7 +401,7 @@ fn list_linux_sources() -> Result<Vec<PhysicalSource>, String> {
 
 #[cfg(target_os = "windows")]
 fn list_windows_sources() -> Result<Vec<PhysicalSource>, String> {
-    const SCRIPT: &str = "$disks = Get-Disk | ForEach-Object { $disk = $_; $parts = @(); $partitionStateKnown = $true; try { $parts = @(Get-Partition -DiskNumber $disk.Number -ErrorAction Stop | Select-Object PartitionNumber, Size, Type, DriveLetter, AccessPaths) } catch { $partitionStateKnown = $false }; [pscustomobject]@{ Number = $disk.Number; FriendlyName = $disk.FriendlyName; SerialNumber = $disk.SerialNumber; Size = $disk.Size; BusType = [string]$disk.BusType; IsBoot = $disk.IsBoot; IsSystem = $disk.IsSystem; PartitionStateKnown = $partitionStateKnown; Partitions = $parts } }; ConvertTo-Json -InputObject @($disks) -Depth 4 -Compress";
+    const SCRIPT: &str = "$disks = Get-Disk | ForEach-Object { $disk = $_; $parts = @(); $partitionStateKnown = $true; try { $parts = @(Get-Partition -DiskNumber $disk.Number -ErrorAction Stop | Select-Object PartitionNumber, Size, Offset, Type, DriveLetter, AccessPaths) } catch { $partitionStateKnown = $false }; [pscustomobject]@{ Number = $disk.Number; FriendlyName = $disk.FriendlyName; SerialNumber = $disk.SerialNumber; Size = $disk.Size; BusType = [string]$disk.BusType; IsBoot = $disk.IsBoot; IsSystem = $disk.IsSystem; PartitionStateKnown = $partitionStateKnown; Partitions = $parts } }; ConvertTo-Json -InputObject @($disks) -Depth 4 -Compress";
     let output = Command::new("powershell.exe")
         .args([
             "-NoLogo",
@@ -471,6 +476,9 @@ fn list_macos_sources() -> Result<Vec<PhysicalSource>, String> {
                                 .or_else(|| dictionary.get("Size"))
                                 .and_then(plist::Value::as_unsigned_integer)
                                 .unwrap_or(0),
+                            offset_bytes: dictionary
+                                .get("PartitionOffset")
+                                .and_then(plist::Value::as_unsigned_integer),
                             kind: plist_string(dictionary, "FilesystemType")
                                 .or_else(|| plist_string(dictionary, "Content")),
                             mount_points: partition_mount.into_iter().collect(),
@@ -722,6 +730,125 @@ fn scan_ntfs_deleted_files(
         .map_err(|error| error.to_string())
 }
 
+#[tauri::command]
+fn scan_selected_ntfs_partition(
+    source_id: String,
+    expected_model: Option<String>,
+    expected_serial: Option<String>,
+    expected_capacity_bytes: u64,
+    partition_id: String,
+    expected_partition_offset_bytes: u64,
+    expected_partition_size_bytes: u64,
+) -> Result<Vec<DeletedFileReview>, String> {
+    let current_sources = list_physical_sources()?;
+    let source = current_sources
+        .iter()
+        .find(|source| source.id == source_id)
+        .ok_or_else(|| {
+            "Selected external drive is no longer available. Refresh and select it again."
+                .to_owned()
+        })?;
+    if !source.external_state_known || !source.is_external {
+        return Err("Selected source is not confirmed as an external drive.".to_owned());
+    }
+    if !source.system_state_known || source.is_system {
+        return Err("System drive access is locked.".to_owned());
+    }
+    if !source.mount_state_known || !source.mount_points.is_empty() {
+        return Err(
+            "Unmount all volumes on the selected external drive before scanning.".to_owned(),
+        );
+    }
+    if source.model != expected_model
+        || source.serial != expected_serial
+        || source.capacity_bytes != expected_capacity_bytes
+    {
+        return Err(
+            "Drive identity changed. Refresh and select the external drive again.".to_owned(),
+        );
+    }
+    let partition = source
+        .partitions
+        .iter()
+        .find(|partition| partition.id == partition_id)
+        .ok_or_else(|| "Selected partition is no longer present on this drive.".to_owned())?;
+    if !partition.mount_points.is_empty() {
+        return Err("Unmount the selected partition before scanning it.".to_owned());
+    }
+    let Some(partition_offset_bytes) = partition.offset_bytes else {
+        return Err(
+            "Partition offset is unavailable; refusing to scan an unverified range.".to_owned(),
+        );
+    };
+    if partition_offset_bytes != expected_partition_offset_bytes
+        || partition.size_bytes != expected_partition_size_bytes
+    {
+        return Err(
+            "Partition layout changed. Refresh the drive list and select again.".to_owned(),
+        );
+    }
+    if partition.size_bytes == 0
+        || partition_offset_bytes
+            .checked_add(partition.size_bytes)
+            .is_none_or(|end| end > source.capacity_bytes)
+    {
+        return Err("Selected partition bounds are invalid.".to_owned());
+    }
+
+    let device_path = physical_device_path(&source.id)?;
+    let device = ReadOnlyDeviceReader::open(device_path, source.capacity_bytes)
+        .map_err(|error| format!("Could not open the external drive read-only: {error}"))?;
+    recovery_core::scan_ntfs_deleted_files_from_reader(
+        &device,
+        partition_offset_bytes,
+        partition.size_bytes,
+    )
+    .map(|entries| {
+        entries
+            .into_iter()
+            .map(|entry| DeletedFileReview {
+                record_number: entry.record_number,
+                sequence_number: entry.sequence_number,
+                is_directory: entry.is_directory,
+                name: entry.name,
+                parent_record_number: entry.parent_record_number,
+                data_size_bytes: entry.data_size_bytes,
+            })
+            .collect()
+    })
+    .map_err(|error| error.to_string())
+}
+
+fn physical_device_path(source_id: &str) -> Result<String, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let identifier = source_id.strip_prefix("/dev/").unwrap_or(source_id);
+        if valid_macos_disk_identifier(identifier) {
+            return Ok(format!("/dev/r{identifier}"));
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if source_id.starts_with("/dev/")
+            && source_id[5..]
+                .chars()
+                .all(|character| character.is_ascii_alphanumeric() || "_-".contains(character))
+        {
+            return Ok(source_id.to_owned());
+        }
+    }
+    #[cfg(target_os = "windows")]
+    {
+        if let Some(number) = source_id.strip_prefix("PhysicalDrive")
+            && !number.is_empty()
+            && number.chars().all(|character| character.is_ascii_digit())
+        {
+            return Ok(format!(r"\\.\{source_id}"));
+        }
+    }
+    Err("Could not safely map the selected external drive to a device path.".to_owned())
+}
+
 fn partition_review(partition: recovery_core::PartitionFinding) -> PartitionReview {
     PartitionReview {
         table: partition.table.to_owned(),
@@ -789,12 +916,12 @@ fn cancel_lost_filesystem_search() {
 
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             inspect_image,
             list_physical_sources,
             scan_image,
             scan_ntfs_deleted_files,
+            scan_selected_ntfs_partition,
             search_lost_filesystems,
             cancel_lost_filesystem_search
         ])
@@ -848,8 +975,7 @@ mod tests {
 
         assert_eq!(source_imaging_blocker(&source), None);
         source.serial = None;
-        assert_eq!(source_imaging_blocker(&source), Some("Serial unavailable"));
-        source.serial = Some("SERIAL-4".to_owned());
+        assert_eq!(source_imaging_blocker(&source), None);
         source.mount_points.push("/Volumes/Recovery".to_owned());
         assert_eq!(source_imaging_blocker(&source), Some("Source is mounted"));
         source.mount_points.clear();
@@ -873,7 +999,7 @@ mod tests {
 
     #[test]
     fn parses_linux_block_device_inventory_with_child_mounts() {
-        let inventory = r#"{"blockdevices":[{"name":"sda","path":"/dev/sda","type":"disk","size":5000,"model":"Internal SSD","serial":"SERIAL-A","rm":false,"tran":"sata","mountpoints":["/"]},{"name":"sdb","path":"/dev/sdb","type":"disk","size":1000,"model":"External HDD","serial":"SERIAL-B","rm":true,"tran":"usb","mountpoints":[null],"children":[{"name":"sdb1","path":"/dev/sdb1","type":"part","size":1000,"mountpoints":["/media/user/RECOVERY"]}]}]}"#;
+        let inventory = r#"{"blockdevices":[{"name":"sda","path":"/dev/sda","type":"disk","size":5000,"model":"Internal SSD","serial":"SERIAL-A","rm":false,"tran":"sata","mountpoints":["/"]},{"name":"sdb","path":"/dev/sdb","type":"disk","size":1000,"model":"External HDD","serial":"SERIAL-B","rm":true,"tran":"usb","mountpoints":[null],"children":[{"name":"sdb1","path":"/dev/sdb1","type":"part","size":1000,"start":2048,"mountpoints":["/media/user/RECOVERY"]}]}]}"#;
 
         let sources = parse_linux_sources(inventory).unwrap();
 
@@ -884,6 +1010,7 @@ mod tests {
         assert_eq!(sources[0].partitions.len(), 1);
         assert_eq!(sources[0].partitions[0].id, "/dev/sdb1");
         assert_eq!(sources[0].partitions[0].size_bytes, 1000);
+        assert_eq!(sources[0].partitions[0].offset_bytes, Some(2048 * 512));
         assert_eq!(sources[0].mount_points, ["/media/user/RECOVERY"]);
         assert_eq!(
             source_imaging_blocker(&sources[0]),
@@ -899,7 +1026,7 @@ mod tests {
 
     #[test]
     fn parses_windows_disk_inventory_and_system_flags() {
-        let inventory = r#"[{"Number":0,"FriendlyName":"Internal SSD","SerialNumber":"SERIAL-I","Size":4000,"BusType":"NVMe","IsBoot":true,"IsSystem":true,"Partitions":[{"PartitionNumber":1,"Size":4000,"Type":"Basic","DriveLetter":"C"}]},{"Number":2,"FriendlyName":"External HDD","SerialNumber":"SERIAL-C","Size":2000,"BusType":"USB","IsBoot":false,"IsSystem":true,"Partitions":[{"PartitionNumber":1,"Size":2000,"Type":"Basic","DriveLetter":"E"}]}]"#;
+        let inventory = r#"[{"Number":0,"FriendlyName":"Internal SSD","SerialNumber":"SERIAL-I","Size":4000,"BusType":"NVMe","IsBoot":true,"IsSystem":true,"Partitions":[{"PartitionNumber":1,"Size":4000,"Offset":0,"Type":"Basic","DriveLetter":"C"}]},{"Number":2,"FriendlyName":"External HDD","SerialNumber":"SERIAL-C","Size":2000,"BusType":"USB","IsBoot":false,"IsSystem":true,"Partitions":[{"PartitionNumber":1,"Size":2000,"Offset":512,"Type":"Basic","DriveLetter":"E"}]}]"#;
 
         let sources = parse_windows_sources(inventory).unwrap();
 
@@ -908,6 +1035,7 @@ mod tests {
         assert_eq!(sources[0].serial.as_deref(), Some("SERIAL-C"));
         assert_eq!(sources[0].partitions[0].id, "PhysicalDrive2Partition1");
         assert_eq!(sources[0].partitions[0].size_bytes, 2000);
+        assert_eq!(sources[0].partitions[0].offset_bytes, Some(512));
         assert!(sources[0].is_system);
         assert!(sources[0].is_external);
         assert_eq!(

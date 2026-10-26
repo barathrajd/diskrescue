@@ -13,8 +13,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 recovery-core = { path = "../../../crates/recovery-core" }
+disk-reader = { path = "../../../crates/disk-reader" }
 partition-hunter = { path = "../../../crates/partition-hunter" }
-tauri-plugin-dialog = "2.8.3"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 plist = "1.10.3"

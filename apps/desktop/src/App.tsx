@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
-import { listen } from '@tauri-apps/api/event';
-import { cancelLostFilesystemSearch, listPhysicalSources, scanImage, scanNtfsDeletedFiles, searchLostFilesystems, useDiskImageSelection, type DeletedFileEntry, type ImageScan, type LostImageScan, type LostScanProgress, type PhysicalSource, type PartitionFinding } from './hooks/useDiskImageSelection';
+import { listPhysicalSources, scanSelectedNtfsPartition, type DeletedFileEntry, type PhysicalSource } from './hooks/useDiskImageSelection';
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 bytes';
@@ -16,33 +15,28 @@ function formatBytes(bytes: number): string {
 }
 
 function App() {
-  const { selectedImage, imageReview, message, chooseImage, clearImage } = useDiskImageSelection();
   const [activePage, setActivePage] = useState<'drives' | 'partitions' | 'recovery'>('drives');
   const [physicalSources, setPhysicalSources] = useState<PhysicalSource[] | null>(null);
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [selectedPartitionId, setSelectedPartitionId] = useState<string | null>(null);
   const [sourceMessage, setSourceMessage] = useState('');
   const [sourcesLoading, setSourcesLoading] = useState(false);
-  const [imageScan, setImageScan] = useState<{ path: string; result: ImageScan } | null>(null);
-  const [scanMessage, setScanMessage] = useState('');
-  const [scanLoading, setScanLoading] = useState(false);
-  const [lostImageScan, setLostImageScan] = useState<{ path: string; result: LostImageScan } | null>(null);
-  const [lostScanProgress, setLostScanProgress] = useState<LostScanProgress | null>(null);
-  const [lostScanMessage, setLostScanMessage] = useState('');
-  const [lostScanLoading, setLostScanLoading] = useState(false);
-  const [deletedFileScan, setDeletedFileScan] = useState<{ path: string; partitionOffsetBytes: number; entries: DeletedFileEntry[] } | null>(null);
+  const [deletedFileScan, setDeletedFileScan] = useState<{ sourceId: string; partitionId: string; entries: DeletedFileEntry[] } | null>(null);
   const [deletedFileScanMessage, setDeletedFileScanMessage] = useState('');
   const [deletedFileScanLoading, setDeletedFileScanLoading] = useState(false);
   const [fileCategory, setFileCategory] = useState<'photos' | 'videos' | 'all'>('all');
   const selectedSource = physicalSources?.find((source) => source.id === selectedSourceId) ?? null;
   const selectedPartition = selectedSource?.partitions.find((partition) => partition.id === selectedPartitionId) ?? null;
+  const partitionScanReady = Boolean(selectedSource && selectedPartition
+    && selectedSource.externalStateKnown && selectedSource.isExternal
+    && selectedSource.systemStateKnown && !selectedSource.isSystem
+    && selectedSource.mountStateKnown && selectedSource.mountPoints.length === 0
+    && selectedPartition.mountPoints.length === 0
+    && selectedPartition.offsetBytes !== null && selectedPartition.sizeBytes > 0);
 
   function openSource(sourceId: string) {
     setSelectedSourceId(sourceId);
     setSelectedPartitionId(null);
-    clearImage();
-    setImageScan(null);
-    setLostImageScan(null);
     setDeletedFileScan(null);
     setActivePage('partitions');
   }
@@ -74,56 +68,13 @@ function App() {
     void refreshPhysicalSources();
   }, []);
 
-  async function scanSelectedImage() {
-    if (!selectedImage) return;
-    setScanMessage('');
-    setScanLoading(true);
-    try {
-      setImageScan({ path: selectedImage.path, result: await scanImage(selectedImage.path) });
-    } catch (error) {
-      setImageScan(null);
-      setScanMessage(error instanceof Error ? error.message : 'Could not scan this image.');
-    } finally {
-      setScanLoading(false);
-    }
-  }
-
-  async function findLostVolumes() {
-    if (!selectedImage) return;
-    setLostScanMessage('');
-    setLostImageScan(null);
-    setLostScanProgress(null);
-    setLostScanLoading(true);
-    let unlisten: (() => void) | undefined;
-    try {
-      unlisten = await listen<LostScanProgress>('lost-filesystem-progress', (event) => {
-        setLostScanProgress(event.payload);
-      });
-      const result = await searchLostFilesystems(selectedImage.path);
-      setLostImageScan({ path: selectedImage.path, result });
-    } catch (error) {
-      setLostScanMessage(error instanceof Error ? error.message : 'Could not search this image.');
-    } finally {
-      unlisten?.();
-      setLostScanLoading(false);
-    }
-  }
-
-  async function cancelLostSearch() {
-    try {
-      await cancelLostFilesystemSearch();
-    } catch (error) {
-      setLostScanMessage(error instanceof Error ? error.message : 'Could not cancel the search.');
-    }
-  }
-
-  async function scanDeletedEntries(partition: PartitionFinding) {
-    if (!selectedImage || partition.filesystem?.kind !== 'NTFS') return;
+  async function scanDeletedEntries() {
+    if (!selectedSource || !selectedPartition) return;
     setDeletedFileScanMessage('');
     setDeletedFileScanLoading(true);
     try {
-      const entries = await scanNtfsDeletedFiles(selectedImage.path, partition.offsetBytes, partition.lengthBytes);
-      setDeletedFileScan({ path: selectedImage.path, partitionOffsetBytes: partition.offsetBytes, entries });
+      const entries = await scanSelectedNtfsPartition(selectedSource, selectedPartition);
+      setDeletedFileScan({ sourceId: selectedSource.id, partitionId: selectedPartition.id, entries });
     } catch (error) {
       setDeletedFileScan(null);
       setDeletedFileScanMessage(error instanceof Error ? error.message : 'Could not read deleted NTFS entries.');
@@ -132,15 +83,8 @@ function App() {
     }
   }
 
-  const visibleImageScan =
-    imageScan && selectedImage && imageScan.path === selectedImage.path
-      ? imageScan.result
-      : null;
-  const visibleLostImageScan =
-    lostImageScan && selectedImage && lostImageScan.path === selectedImage.path
-      ? lostImageScan.result
-      : null;
-  const visibleDeletedFileScan = deletedFileScan && selectedImage && deletedFileScan.path === selectedImage.path
+  const visibleDeletedFileScan = deletedFileScan && selectedSource && selectedPartition
+    && deletedFileScan.sourceId === selectedSource.id && deletedFileScan.partitionId === selectedPartition.id
     ? deletedFileScan
     : null;
   const filteredDeletedEntries = visibleDeletedFileScan?.entries.filter((entry) => {
@@ -152,9 +96,6 @@ function App() {
     if (fileCategory === 'videos') return videoExtensions.includes(extension);
     return true;
   }) ?? [];
-  const lostScanPercent = lostScanProgress && lostScanProgress.totalBytes > 0
-    ? Math.min(100, Math.floor(lostScanProgress.scannedBytes / lostScanProgress.totalBytes * 100))
-    : 0;
 
   return (
     <main className="app-shell">
@@ -171,7 +112,7 @@ function App() {
         <div className="rail-section-label">WORKSPACE</div>
         <div className="nav-item nav-item-active" aria-current="page">
           <span className="nav-icon" aria-hidden="true">◫</span>
-          <span>Image recovery</span>
+          <span>Drive recovery</span>
           <span className="nav-dot" />
         </div>
 
@@ -183,15 +124,15 @@ function App() {
 
       <section className="workspace" id="top">
         <header className="topbar">
-          <div className="breadcrumb"><span>WORKSPACE</span><b>/</b>{activePage !== 'drives' && <><button type="button" onClick={() => setActivePage('drives')}>EXTERNAL DRIVES</button><b>/</b></>}{activePage === 'recovery' ? 'RECOVERY' : activePage === 'partitions' ? 'PARTITIONS' : 'IMAGE RECOVERY'}</div>
-          <div className="topbar-status"><span className="status-light" /> LOCAL SESSION</div>
+          <div className="breadcrumb"><span>WORKSPACE</span><b>/</b>{activePage !== 'drives' && <><button type="button" onClick={() => setActivePage('drives')}>EXTERNAL DRIVES</button><b>/</b></>}{activePage === 'recovery' ? 'RECOVERY' : activePage === 'partitions' ? 'PARTITIONS' : 'EXTERNAL DRIVES'}</div>
+          <div className="topbar-status"><span className="status-light" /> READ-ONLY SESSION</div>
         </header>
 
         <div className="content">
           <div className="hero-grid">
             <div className="hero-copy">
               <div className="eyebrow"><span className="eyebrow-line" /> {activePage === 'drives' ? 'A CAREFUL WAY BACK' : activePage === 'partitions' ? 'DRIVE / PARTITIONS' : 'PARTITION / RECOVERY'}</div>
-              <h1>{activePage === 'drives' ? <>Choose the external drive first.<br /><em>Keep it untouched.</em></> : activePage === 'partitions' ? <>Review its partitions.<br /><em>Keep the source safe.</em></> : <>Work from a copy.<br /><em>Recover with care.</em></>}</h1>
+              <h1>{activePage === 'drives' ? <>Choose the external drive first.<br /><em>Keep it untouched.</em></> : activePage === 'partitions' ? <>Review its partitions.<br /><em>Keep the source safe.</em></> : <>Scan this partition.<br /><em>Keep it untouched.</em></>}</h1>
               <p className="hero-description">
                 {activePage === 'drives'
                   ? 'Select an external source to load its partition list. Internal drives stay hidden.'
@@ -214,8 +155,8 @@ function App() {
           <section className="safety-strip" aria-label="Safety requirements">
             <div className="safety-icon" aria-hidden="true">!</div>
             <div className="safety-copy">
-              <strong>Do not mount, repair, or scan the affected drive.</strong>
-                <span>{activePage === 'drives' ? 'DiskRescue keeps internal drives locked. Choose an external drive to review its partition metadata.' : 'DiskRescue does not mount or write to the source. Recovery scanning uses an existing disk image in this preview.'}</span>
+              <strong>Keep the affected partition unmounted.</strong>
+                <span>{activePage === 'drives' ? 'DiskRescue keeps internal drives locked. Choose an external drive to review its partitions.' : 'DiskRescue reads the selected external partition directly in read-only mode. It will not mount, repair, or write to it.'}</span>
             </div>
             <span className="safety-tag">SOURCE PROTECTED</span>
           </section>
@@ -261,7 +202,7 @@ function App() {
                       </div>
                       <div className={source.eligibilityReason ? 'source-eligibility blocked' : 'source-eligibility'}>
                         <span>{source.eligibilityReason ?? 'External drive detected'}</span>
-                        <small>Metadata only · imaging unavailable in this preview</small>
+                        <small>Partition scan available when unmounted</small>
                       </div>
                       <span className="source-open-label">{isSelected ? 'Open partitions ↗' : 'View partitions ↗'}</span>
                     </article>
@@ -270,7 +211,7 @@ function App() {
               </div>
             ))}
             {selectedSourceId && (
-              <p className="source-safety-note">Source selected for this session. Physical imaging is unavailable in this preview; no disk contents have been read.</p>
+              <p className="source-safety-note">Drive selected. Choose one of its partitions to open the scan workspace.</p>
             )}
             <p className="source-safety-note">Do not mount or repair the original. Partition details below come from device metadata only.</p>
           </section>}
@@ -300,7 +241,7 @@ function App() {
                   ))}
                 </div>
               )}
-              <p className="partition-safety-note">Selecting a partition opens its workspace. Direct physical recovery scanning is not enabled in this build; use an existing image in the next screen.</p>
+              <p className="partition-safety-note">Selecting a partition opens its workspace. DiskRescue reads the selected external partition directly and read-only; it will refuse mounted or internal drives.</p>
             </section>
           )}
 
@@ -314,127 +255,34 @@ function App() {
             <section className="image-panel" aria-labelledby="image-heading">
               <div className="panel-heading">
                 <div>
-                  <div className="panel-kicker">RECOVERY INPUT / IMAGE COPY</div>
-                  <h2 id="image-heading">Open an image for this recovery workspace</h2>
+                  <div className="panel-kicker">READ-ONLY SCAN / SELECTED PARTITION</div>
+                  <h2 id="image-heading">Scan this partition</h2>
                 </div>
-                <button className="browse-button inventory-refresh" onClick={chooseImage} type="button">
-                  {selectedImage ? 'Choose another image' : 'Browse images'} <span aria-hidden="true">↗</span>
-                </button>
+                <span className="panel-status"><span /> SOURCE READ-ONLY</span>
               </div>
 
-              {!selectedImage ? (
-                <button className="dropzone image-dropzone-compact" onClick={chooseImage} type="button">
-                  <span className="drop-icon" aria-hidden="true"><svg viewBox="0 0 32 32" fill="none"><path d="M16 21V6m0 0-6 6m6-6 6 6M6 20v6h20v-6" /></svg></span>
-                  <span className="drop-title">Select an existing disk image</span>
-                  <span className="drop-subtitle">Recovery reads an image copy; this build does not scan the physical partition.</span>
+              <div className="scan-actions direct-scan-actions">
+                <p>Read NTFS metadata directly from the selected, unmounted external partition. No mount, repair, or source write is performed.</p>
+                <button className="browse-button inventory-refresh" onClick={() => void scanDeletedEntries()} disabled={!partitionScanReady || deletedFileScanLoading} type="button">
+                  {deletedFileScanLoading ? 'Scanning partition…' : 'Scan partition'} <span aria-hidden="true">⌕</span>
                 </button>
-              ) : (
-                <div className="selected-file selected-image-inline" aria-live="polite">
-                  <div className="file-emblem" aria-hidden="true">IMG</div>
-                  <div className="file-details">
-                    <strong title={selectedImage.name}>{selectedImage.name}</strong>
-                    <span>{imageReview ? formatBytes(imageReview.imageBytes) : 'Selected locally'} <i /> Read-only image</span>
-                  </div>
-                </div>
+              </div>
+              {selectedSource && selectedPartition && !partitionScanReady && (
+                <p className="partition-safety-note" role="status">To scan, DiskRescue must confirm this is an external non-system drive and the selected partition is unmounted.</p>
               )}
-
-              {message && <p className="input-message" role="alert">{message}</p>}
-
-              {imageReview && (
-                <div className="image-review" aria-live="polite">
-                  <div><span>MBR</span><strong>{imageReview.mbrStatus}</strong><small>{imageReview.mbrPartitionCount} partitions</small></div>
-                  <div><span>GPT</span><strong>{imageReview.gptStatus}</strong><small>{imageReview.gptPartitionCount} partitions</small></div>
-                </div>
-              )}
-
-              {imageReview && (
-                <div className="scan-actions">
-                  <p>Check partition entries for supported NTFS and ext4 structures.</p>
-                  <button className="browse-button inventory-refresh" onClick={scanSelectedImage} disabled={scanLoading} type="button">
-                    {scanLoading ? 'Scanning…' : 'Scan partitions'} <span aria-hidden="true">⌕</span>
-                  </button>
-                </div>
-              )}
-              {scanMessage && <p className="input-message" role="alert">{scanMessage}</p>}
-              {visibleImageScan && (
+              {deletedFileScanMessage && <p className="input-message" role="alert">{deletedFileScanMessage}</p>}
+              {visibleDeletedFileScan && (
                 <div className="scan-results" aria-live="polite">
                   <div className="scan-results-heading">
-                    <strong>Partition scan</strong>
-                    <span>{visibleImageScan.partitions.length} entries · read-only</span>
+                    <strong>NTFS metadata scan complete</strong>
+                    <span>{visibleDeletedFileScan.entries.length} deleted entries · read-only</span>
                   </div>
-                  {visibleImageScan.partitions.length === 0 ? (
-                    <p className="scan-empty">No valid partition entries were found in the primary tables.</p>
-                  ) : visibleImageScan.partitions.map((partition) => (
-                    <article className="scan-result-row" key={`${partition.table}-${partition.index}`}>
-                      <div className="scan-result-main">
-                        <strong>{partition.filesystem?.kind ?? 'Unsupported or unknown filesystem'}</strong>
-                        <span>{partition.table} entry {partition.index} · {partition.typeLabel}</span>
-                        <small>Start {formatBytes(partition.offsetBytes)} · Length {formatBytes(partition.lengthBytes)}</small>
-                        {partition.filesystem?.reasons.map((reason) => <small key={reason}>✓ {reason}</small>)}
-                        {partition.issue && <small className="scan-issue">{partition.issue}</small>}
-                      </div>
-                      <span className={partition.filesystem ? 'scan-confidence' : 'scan-confidence unknown'}>
-                        {partition.filesystem ? `${partition.filesystem.confidence} confidence` : 'Needs review'}
-                      </span>
-                      {partition.filesystem?.kind === 'NTFS' && (
-                        <button
-                          className="source-select-button"
-                          type="button"
-                          disabled={deletedFileScanLoading}
-                          onClick={() => void scanDeletedEntries(partition)}
-                        >
-                          {deletedFileScanLoading ? 'Reading…' : 'List deleted files'}
-                        </button>
-                      )}
-                    </article>
-                  ))}
-                  {(visibleImageScan.mbrError || visibleImageScan.gptError) && (
-                    <p className="scan-warning">Primary table notes: {[visibleImageScan.mbrError, visibleImageScan.gptError].filter(Boolean).join(' · ')}</p>
-                  )}
-                  <p className="scan-limitation">This scan checks primary partition-table entries only. Lost partition tables and backup GPT scanning are not available yet.</p>
-                </div>
-              )}
-
-              {imageReview && (
-                <div className="lost-scan-panel">
-                  <div className="scan-actions">
-                    <p>Search the rest of this image for lost NTFS and ext4 volume starts.</p>
-                    <button className="browse-button inventory-refresh" onClick={findLostVolumes} disabled={lostScanLoading} type="button">
-                      {lostScanLoading ? 'Searching…' : 'Find lost volumes'} <span aria-hidden="true">⌕</span>
-                    </button>
-                  </div>
-                  {lostScanMessage && <p className="input-message" role="alert">{lostScanMessage}</p>}
-                  {visibleLostImageScan && (
-                    <div className="scan-results lost-scan-results" aria-live="polite">
-                      <div className="scan-results-heading">
-                        <strong>Lost-volume search {visibleLostImageScan.complete ? 'complete' : 'stopped early'}</strong>
-                        <span>{visibleLostImageScan.candidates.length} candidates · {formatBytes(visibleLostImageScan.scannedBytes)} searched</span>
-                      </div>
-                      {visibleLostImageScan.candidates.length === 0 ? (
-                        <p className="scan-empty">No supported filesystem starts were found outside known partitions.</p>
-                      ) : visibleLostImageScan.candidates.map((candidate) => (
-                        <article className="scan-result-row" key={`${candidate.table}-${candidate.index}`}>
-                          <div className="scan-result-main">
-                            <strong>{candidate.filesystem?.kind ?? 'Unknown filesystem'}</strong>
-                            <span>Candidate at {formatBytes(candidate.offsetBytes)} · {candidate.table}</span>
-                            {candidate.filesystem?.reasons.map((reason) => <small key={reason}>✓ {reason}</small>)}
-                          </div>
-                          <span className="scan-confidence">{candidate.filesystem?.confidence ?? 'unknown'} confidence</span>
-                          {candidate.filesystem?.kind === 'NTFS' && (
-                            <button className="source-select-button" type="button" disabled={deletedFileScanLoading} onClick={() => void scanDeletedEntries(candidate)}>
-                              {deletedFileScanLoading ? 'Reading…' : 'List deleted files'}
-                            </button>
-                          )}
-                        </article>
-                      ))}
-                      <p className="scan-limitation">Search checks 512-byte boundaries and supports NTFS and ext4 signatures. A candidate is not proof that files can be recovered.</p>
-                    </div>
-                  )}
+                  <p className="scan-limitation">This scan lists names and metadata. File contents and folder paths are not recovered yet.</p>
                 </div>
               )}
 
               <div className="image-panel-footer">
-                <span><span className="tiny-check">✓</span> File stays on this device</span>
+                <span><span className="tiny-check">✓</span> Source is read-only</span>
                 <span>NO UPLOADS</span>
               </div>
             </section>
@@ -450,7 +298,7 @@ function App() {
                 </li>
                 <li>
                   <span className="step-number">02</span>
-                  <span className="step-copy"><strong>Open its disk image</strong><small>Physical scanning is not enabled</small></span>
+                  <span className="step-copy"><strong>Scan the partition</strong><small>Read-only access · unmounted source</small></span>
                   <span className="step-state step-state-next">NEXT</span>
                 </li>
                 <li>
@@ -486,14 +334,10 @@ function App() {
               <div className="recovery-results-pane">
                 <div className="results-toolbar">
                   <div>
-                    <strong>Recovered file list</strong>
-                  <span>{visibleDeletedFileScan
-                      ? `Volume at ${formatBytes(visibleDeletedFileScan.partitionOffsetBytes)} · ${filteredDeletedEntries.length} entries · metadata only`
-                      : visibleLostImageScan
-                        ? `${visibleLostImageScan.candidates.length} volume candidates · select an NTFS partition to list files`
-                        : visibleImageScan
-                          ? `${visibleImageScan.partitions.length} partitions checked · select an NTFS partition to list files`
-                          : 'No image scan yet'}</span>
+                  <strong>Deleted file list</strong>
+                    <span>{visibleDeletedFileScan
+                      ? `${filteredDeletedEntries.length} entries in this view · NTFS metadata only`
+                      : 'Scan the selected partition to list deleted names'}</span>
                   </div>
                   <button className="filter-button" type="button" disabled>Filter <span aria-hidden="true">⌄</span></button>
                 </div>
@@ -522,24 +366,8 @@ function App() {
                     <span className="empty-art-front"><i /><i /><i /></span>
                     <span className="empty-art-lens" />
                   </div>
-                  <h3>{selectedImage ? 'Select an NTFS volume to list deleted names' : 'Start with a disk image'}</h3>
-                  <p>{selectedImage
-                    ? 'Run a partition scan or find lost volumes, then choose “List deleted files” on an NTFS result. File contents and export are still in development.'
-                    : 'Select an external source above, then open an existing disk image. Physical imaging is not available in this preview.'}</p>
-                  {visibleLostImageScan && (
-                    <div className="volume-summary">
-                      <span className="summary-pulse" />
-                      <span>Volume search {visibleLostImageScan.complete ? 'finished' : 'stopped'} · {visibleLostImageScan.candidates.length} candidates</span>
-                    </div>
-                  )}
-                  {lostScanLoading && lostScanProgress && (
-                    <div className="browser-scan-progress" aria-live="polite">
-                      <div><span>Searching image regions</span><strong>{lostScanPercent}%</strong></div>
-                      <progress max="100" value={lostScanPercent} aria-label="Image volume search progress" />
-                      <small>{formatBytes(lostScanProgress.scannedBytes)} of {formatBytes(lostScanProgress.totalBytes)} checked</small>
-                      <button className="text-button" onClick={cancelLostSearch} type="button">Cancel search</button>
-                    </div>
-                  )}
+                  <h3>Scan the selected partition</h3>
+                  <p>Click <strong>Scan partition</strong> above to read the unmounted external partition directly. DiskRescue will open it read-only; recovery contents and export are still in development.</p>
                 </div>}
                 <footer className="recovery-action-bar">
                   <div><span className="destination-mark" aria-hidden="true">↗</span><span><strong>Recovery destination</strong><small>Choose a separate drive when file export is ready.</small></span></div>
@@ -552,14 +380,14 @@ function App() {
 
           <section className="build-note" aria-label="Preview build status">
             <span className="build-note-mark" aria-hidden="true">i</span>
-            <p><strong>Preview build.</strong> Image inspection and NTFS deleted-name listing are available. Physical imaging and file-content export are still in development.</p>
-            <span className="build-note-id">MILESTONE 05 / IMAGE SCAN</span>
+            <p><strong>Preview build.</strong> External unmounted NTFS partitions can be scanned read-only for deleted names. File-content recovery and export are still in development.</p>
+            <span className="build-note-id">MILESTONE 05 / PARTITION SCAN</span>
           </section>
         </div>
 
         <footer className="footer">
           <span>DISKRESCUE <span className="footer-separator">/</span> RECOVERY WORKSPACE</span>
-          <span>YOUR IMAGE AND RECOVERED FILES ARE SENSITIVE DATA.</span>
+          <span>YOUR DRIVE AND RECOVERED DATA ARE SENSITIVE.</span>
         </footer>
       </section>
     </main>

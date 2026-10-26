@@ -324,7 +324,16 @@ pub fn scan_ntfs_deleted_files(
     partition_length_bytes: u64,
 ) -> io::Result<Vec<NtfsFileRecord>> {
     let image = ImageReader::open(path)?;
-    fs_ntfs::scan_deleted_file_records(&image, partition_offset_bytes, partition_length_bytes)
+    scan_ntfs_deleted_files_from_reader(&image, partition_offset_bytes, partition_length_bytes)
+}
+
+/// Scans a selected NTFS partition through a read-only random-access source.
+pub fn scan_ntfs_deleted_files_from_reader<R: ReadAt>(
+    source: &R,
+    partition_offset_bytes: u64,
+    partition_length_bytes: u64,
+) -> io::Result<Vec<NtfsFileRecord>> {
+    fs_ntfs::scan_deleted_file_records(source, partition_offset_bytes, partition_length_bytes)
 }
 
 pub fn inspect_image(path: impl AsRef<Path>) -> io::Result<ImageInspection> {
