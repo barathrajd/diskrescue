@@ -22,7 +22,13 @@
 5. If mechanical symptoms, disconnects or severe I/O errors occur, prioritize a professional lab.
 6. Treat all disk images and recovered data as sensitive, and work offline.
 
-## Safe imaging workflow
+## Safe recovery workflow
+
+Prefer imaging the source to a separate healthy destination, then scan the
+image. The desktop also plans a direct-scan path for confirmed external drives;
+that path stays disabled until a narrow platform helper can authorize and
+revalidate read-only access.
+
 1. Boot a Linux live USB with automount disabled if possible.
 2. Identify drives: `lsblk -o NAME,SIZE,MODEL,SERIAL,FSTYPE,MOUNTPOINTS` and `ls -l /dev/disk/by-id/`.
 3. Mount only the healthy destination disk and verify free capacity >= source HDD capacity for a raw image.
@@ -30,7 +36,9 @@
 5. After verifying identifiers, run:
    `sudo ddrescue -n /dev/disk/by-id/SOURCE_DISK /mnt/healthy-drive/diskrescue.img /mnt/healthy-drive/diskrescue.map`
 6. Keep the mapfile. Do not retry aggressively if the drive is failing.
-7. Scan the image, never the original drive. Recover files to a different physical disk.
+7. Scan the image when available and recover files to a different physical disk.
+   A direct physical scan must use read-only access, keep every source volume
+   unmounted, and write nothing to the source.
 
 ## Proposed repository layout
 ```text
@@ -57,7 +65,8 @@ diskrescue/
 - `apps/desktop`: Tauri 2, React 19, TypeScript, shadcn/ui, Zustand.
 - `crates/disk-reader`: read-only random-access trait, file-backed image reader, bounded reads, overflow checks.
 - `crates/partition-parser`: protective MBR, GPT headers and CRC checks, primary/backup GPT, candidate boundaries.
-- `crates/partition-hunter`: NTFS boot sector and ext4 superblock candidates; non-destructive confidence scoring.
+- `crates/partition-hunter`: NTFS boot sector and ext4 superblock candidates
+  from images or an authorized read-only physical source; confidence scoring.
 - `crates/fs-ntfs`: MFT records, fixup arrays, runlists, deleted records, directories and export.
 - `crates/fs-ext4`: superblocks, group descriptors, inodes, extents, journal analysis where feasible.
 - `crates/file-carver`: JPEG, PNG, PDF, ZIP, file boundary detection and validation.
@@ -69,8 +78,10 @@ diskrescue/
 ## Phased milestones
 ### M0: Incident preservation (immediate)
 - Image affected HDD with ddrescue or seek professional help if failing.
-- Record capacity, model, SMART indicators when safe, imaging map and hash of successfully captured image.
-- Do not run the new tool on the original source.
+- Record capacity, model, and SMART indicators when safe, along with the
+  imaging map and hash of the captured image.
+- Until direct-scan helper authorization and safety checks are complete, do not
+  run the new tool on the original source.
 
 ### M1: Read-only engine and test harness (1–2 weeks)
 - Implement `ReadAt` trait and image-backed reader.
@@ -84,6 +95,10 @@ diskrescue/
 - Validate NTFS boot sectors and ext4 superblocks using multiple structural checks.
 - Distinguish active vs historical partition candidates.
 - Show confidence, offsets, length estimates, and reasons; do not modify partition tables.
+- Run the same bounded discovery against an authorized external physical source,
+  scanning the whole disk rather than only the partitions in its current table.
+- Report progress and support safe cancellation for both image and physical
+  scans.
 
 ### M3: NTFS metadata recovery (3–6 weeks)
 - Parse MFT and deleted records; map nonresident data runs.
@@ -96,20 +111,24 @@ diskrescue/
 - Explain limits due to reuse, journal activity, and overwritten blocks.
 
 ### M5: Raw file carving (2–4 weeks)
-- Implement JPEG, PNG, PDF and ZIP signatures and structural validators.
+- Implement JPEG, PNG, PDF, ZIP, and common MP4/MOV signatures and structural
+  validators.
 - Avoid promising filenames or folder structure from carving.
 - Stream to a separate disk and provide partial/corrupt status.
 
 ### M6: Desktop UI (2–4 weeks)
-- Source selection with strong warning and disk-image default.
-- Partition candidates, scan modes, file filtering, preview, export and logs.
+- External-drive selection with internal disks locked, a clear read-only
+  warning, and disk images as the preferred recovery input.
+- Existing and discovered lost-partition candidates, scan modes, file filtering,
+  preview, export, and logs on separate workflow pages.
 - Pause/resume with durable checkpoints.
 - No network access required.
 
 ### M7: Expanded support (ongoing)
 - exFAT/FAT32; SSD/NVMe source imaging and TRIM warnings.
 - Additional filesystem support and improved fragmented-file handling.
-- Read-only device access via platform-specific backends.
+- Read-only device access via platform-specific authorized helpers. Never run
+  the desktop UI as root or change device permissions to bypass authorization.
 
 ## CLI sketch
 ```

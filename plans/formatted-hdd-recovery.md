@@ -2,20 +2,35 @@
 
 ## Objective
 
-Give the owner of a twice-formatted HDD a free, offline, best-effort way to
-recover files using a Tauri desktop app on Windows, macOS, or Linux. The app
-must work from a read-only disk image, which it can create on a separate healthy
-drive or open if the user already created it. Recover usable file contents
-first; preserve names and folders when filesystem metadata survives, and never
-promise recovery of overwritten data.
+Give the owner of a formatted HDD a free, offline, best-effort way to find lost
+partitions and recover files using a Tauri desktop app on Windows, macOS, or
+Linux. Prefer a read-only disk image on a separate healthy drive. Where a
+platform supports a narrowly authorized read-only helper, also let the user
+select an external drive and scan it directly without a file picker. Recover
+usable file contents; preserve names and folders when filesystem metadata
+survives, and never promise recovery of overwritten data.
 
 ## Success criteria
 
 The first release is successful when these observable safety and recovery
 checks pass.
 
-- The same recovery workflow works from an existing image on Windows, macOS,
-  and Linux.
+- The Rust recovery engine opens and scans existing images on Windows, macOS,
+  and Linux. The desktop starts with physical-drive selection when safe direct
+  scanning is supported.
+- The desktop can scan a confirmed external physical drive without relying on
+  its current partition table, but only through a platform-authorized helper
+  that opens the source read-only and revalidates its identity before each scan.
+  If authorization is unavailable, the app explains the blocker and leaves the
+  source untouched.
+- Whole-drive scans report validated lost-partition candidates with filesystem
+  type, offset, estimated length, confidence reasons, and overlaps. The app
+  does not write a new partition table or imply that every signature marks a
+  recoverable volume.
+- Filesystem support is selected from validated on-disk structures, not only
+  the partition type label reported by the operating system. NTFS and ext4 are
+  the first metadata targets; unsupported or ambiguous filesystems are labeled
+  clearly.
 - On platforms with a verified imaging helper, image creation confirms stable
   source details, opens the source read-only, writes to a separate destination,
   and stops safely on read errors or insufficient destination space. Where no
@@ -29,9 +44,8 @@ checks pass.
 - Metadata-based recovery retains names and paths when supported metadata
   survives; carving reports generic names and does not imply original folder
   structure.
-- The first supported catalog covers common document, photo, video, and archive
-  formats, with per-file verified, partial, unsupported, or unrecoverable
-  results.
+- The first supported catalog focuses on common photo and video formats, with
+  per-file verified, partial, unsupported, or unrecoverable results.
 - Actual file results can be browsed by both type and original path, searched,
   filtered, selected in batches, and previewed when a bounded supported preview
   is available.
@@ -54,9 +68,15 @@ establishing a reusable desktop recovery workflow.
   workspace and Rstack frontend.
 - Selecting an existing raw image or creating an image from a physical HDD onto
   a separate healthy destination.
-- Read-only image inspection, lost partition and filesystem discovery, deleted
-  file metadata recovery where supported, and signature-based carving for a
-  defined catalog of common file formats.
+- Read-only image inspection and, where a safe helper is available, direct
+  read-only scanning of confirmed external physical drives. The desktop starts
+  with drive and partition selection; it does not require choosing an image
+  through a Finder or file-picker dialog.
+- Lost-partition and filesystem discovery across the whole selected disk,
+  including regions not described by the current partition table.
+- Deleted-file metadata recovery for supported NTFS and ext4 volumes, followed
+  by signature-based carving for a fixture-backed catalog of common photos and
+  videos.
 - Previewing and selecting candidates, then exporting to a separate destination
   with safe path and conflict handling.
 - A DiskRescue-designed results workspace with selectable **Path** and **Type**
@@ -85,12 +105,18 @@ establishing a reusable desktop recovery workflow.
 ## Approach
 
 Keep parsing and recovery in Rust crates; keep `apps/desktop` as the Tauri
-presentation layer. Route both physical-device imaging and existing-image input
-into the same read-only image pipeline, and require a separate output location
-for both the image and recovered files. Use filesystem metadata first because
-it can retain names and folders, then use validated signatures for supported
-formats when metadata is missing. Signature-based recovery commonly loses
-original names and folder structure, as [PhotoRec's documentation
+presentation layer. Give image files and authorized physical sources the same
+bounded `ReadAt` scanning interface. Image creation writes only to a separate
+healthy destination. Direct physical scans use a narrow platform helper that
+revalidates the external source, requires all source volumes to be unmounted,
+and opens the device read-only. Never run the Tauri UI as root or change device
+permissions to bypass authorization.
+
+Scan the whole disk for validated partition and filesystem structures before
+presenting candidate partitions. Use filesystem metadata first because it can
+retain names and folders, then use validated signatures for supported formats
+when metadata is missing. Signature-based recovery commonly loses original
+names and folder structure, as [PhotoRec's documentation
 explains](https://www.cgsecurity.org/testdisk_doc/photorec.html).
 
 Use REA's inspection of the installed EaseUS 20.9.0 bundle and the user's
@@ -159,8 +185,8 @@ mapfile-based imaging for difficult reads.
 
 ## Milestones
 
-Build each milestone as a usable slice from image input through visible results
-and safe export.
+Build each milestone as a usable slice from a disk image or authorized physical
+source through visible results and safe export.
 
 1. [x] **Open an existing image.** Select an image through a native file picker,
    inspect its MBR/GPT metadata in Rust, and show the image size and findings.
@@ -171,19 +197,21 @@ and safe export.
    from native device metadata; hide internal and unknown devices, load the
    external list on startup, and disable imaging when stable identity or
    required access is unavailable.
-4. **Image a physical HDD.** Use a platform-specific privileged helper to
-   confirm model, serial, and capacity, then revalidate the source and separate
-   destination before imaging. Reopen the completed image in the inspection
-   flow.
+4. **Authorize physical-device access safely.** Use a platform-specific helper
+   for imaging and direct scans. Revalidate device identity, external status,
+   system-disk status, mount state, capacity, and requested byte range before
+   every operation. Keep the UI unprivileged.
    - [x] Add a bounded reader that opens physical devices with read access only.
    - [x] Add a fail-closed guard for identity revalidation, mounted/system
      sources, and source/destination device separation.
-   - [ ] Add platform-specific helper authorization and source revalidation.
+   - [ ] Add platform-specific helper authorization for imaging and scanning;
+     keep macOS direct access disabled until its helper is safely authorized.
    - [ ] Confirm the destination is on a different physical device and reopen
      the completed image in the inspection flow.
-5. [x] **Find the former volume.** Scan the image for partition and filesystem
-   candidates, including supported backup metadata and damaged structures.
-   Show offsets, confidence reasons, and unsupported areas before recovery.
+5. [ ] **Find the former volume.** Scan images and authorized physical sources
+   for filesystem candidates, including supported backup metadata and damaged
+   structures. Show offsets, confidence reasons, and unsupported areas before
+   recovery.
    - [x] Inspect MBR/GPT partition entries and check partition starts for
      structurally consistent NTFS or ext4 signatures.
    - [x] Recover partition entries from a valid backup GPT when the primary GPT
@@ -191,6 +219,13 @@ and safe export.
    - [x] Search image regions at 512-byte boundaries for validated NTFS and
      ext4 starts, skipping known partitions and supporting progress and
      cancellation.
+   - [ ] Generalize lost-filesystem discovery over `ReadAt` so it can scan an
+     authorized physical drive as well as an image.
+   - [ ] Scan the complete selected disk in bounded chunks, independent of the
+     current partition table; report candidate offsets, lengths, confidence,
+     and overlaps with progress and cancellation.
+   - [ ] Show discovered lost-partition candidates in the partition-selection
+     page and let the user open a candidate's separate recovery workspace.
 6. **Recover metadata-backed files.** For the first supported filesystems,
    list recoverable deleted entries with names and paths where metadata
    survives; let the user export selected files to a separate destination.
@@ -210,14 +245,19 @@ and safe export.
    - [x] Wire selected NTFS volume scans into the desktop and show deleted
      names and sizes in the photo/video/all-files browser, marked as metadata
      only until content recovery is available.
+   - [ ] Detect actual filesystem structures instead of trusting OS partition
+     type labels such as “Linux Filesystem.”
+   - [ ] Implement bounded ext4 deleted-entry scanning and file-extent
+     validation for the user's reported Linux-filesystem partitions.
    - [ ] Resolve surviving parent paths and recover supported data streams to
      a separate destination.
-7. **Carve common file formats.** Add bounded scanners and format validators
-   for the agreed common document, photo, video, and archive catalog. Show
-   generic names, file integrity status, and likely partial results.
+7. **Carve common photos and videos.** Add bounded signature scanners and
+   format validators for a fixture-backed first-release catalog, starting with
+   JPEG, PNG, and common MP4/MOV containers. Show generic names, file integrity
+   status, and likely partial results; do not promise original names or paths.
 8. **Add resumable scan sessions.** Deliver real scan state from the Rust
    scanner to the desktop and persist it for offline review.
-   - [x] Put external-drive selection before image input; hide internal and
+   - [x] Put external-drive selection before scanning; hide internal and
      unknown drives and omit any source-mount action.
    - [x] Load partition identifiers, names, sizes, filesystem labels, and
      mount state from OS device metadata when an external drive is selected.
@@ -225,6 +265,10 @@ and safe export.
      recovery into navigable desktop pages with a back path.
    - [x] Add a photo/video results workspace with type/path navigation and a
      truthful empty state until file-level recovery data is available.
+   - [ ] Make whole-disk scanning the physical-drive path: show existing and
+     discovered partitions, then navigate to a separate scan-results page.
+   - [ ] Explain authorization, unsupported filesystem, and scan errors using
+     the underlying reason; never show a generic failure for a known blocker.
    - [ ] Show scan phase, bytes checked, total bytes, and volume/file counts;
      cancel at a safe boundary and persist a checkpoint.
    - [ ] Save scan records offline with source fingerprint, scan version,
@@ -245,26 +289,46 @@ and safe export.
     cancellation, and export on Windows, macOS, and Linux with synthetic
     images; document platform gaps and ensure unsupported paths fail closed.
 
+## Next work session
+
+The next implementation session targets the gap exposed by the first physical
+drive scan: DiskRescue cannot yet read macOS raw devices as an unprivileged app,
+and the selected partition is labeled “Linux Filesystem” while the connected
+metadata scanner only supports NTFS. The macOS offset lookup and scan-error
+reporting are now fixed. Continue in this order:
+
+1. Design and implement a narrow read-only macOS helper authorization path;
+   do not run the desktop app as root or relax `/dev` permissions. Keep physical
+   scanning disabled if identity or authorization cannot be verified.
+2. Generalize the existing lost-filesystem scan to the physical reader, then
+   show whole-disk lost-partition candidates in the drive workflow.
+3. Add ext4 metadata scanning and photo/video carving before presenting the
+   workflow as file recovery. Export recovered content only to a separate
+   destination.
+
+The first usable gate is a synthetic whole-disk fixture that produces a
+validated lost-partition candidate with the expected offset, length, and
+filesystem type. Do not run recovery against the original drive until the
+helper, bounds checks, and read-only behavior are verified.
+
 ## Risks & open questions
 
 Resolve these items during implementation or use the listed fallback.
 
-- **Physical imaging permissions and device identification differ by OS.**
-  Owner: implementation. Keep the app unprivileged and run a read-only
-  acquisition spike for each helper. Windows needs UAC elevation, macOS helper
-  registration requires supported signing and macOS 13 or later for
-  `SMAppService`, and Linux needs an available polkit authentication agent.
-  Fallback to existing-image input plus documented external imaging wherever a
-  helper fails safety checks or cannot be authorized.
+- **Physical-device access permissions and device identification differ by OS.**
+  Owner: implementation. Keep the app unprivileged and use a narrow read-only
+  helper. Windows needs UAC elevation, macOS helper registration requires
+  supported signing, and Linux needs an available polkit authentication agent.
+  Fallback to image-based scanning wherever a helper fails safety checks or
+  cannot be authorized.
 - **macOS helper signing credentials are not currently available.** Owner:
-  release. Keep direct physical imaging disabled on macOS until DiskRescue can
-  ship and validate a signed Launch Daemon; existing-image input remains
-  available.
+  release. Keep direct physical scanning and imaging disabled in release builds
+  until DiskRescue can ship and validate a properly authorized helper. Do not
+  bypass this by changing device permissions or running the whole UI as root.
 - **The source filesystem and exact format operation are unknown.** Owner:
-  recovery engine. Inspect partition and filesystem signatures in the image;
-  initially support NTFS and ext4 metadata paths from the existing
-  implementation plan, and use supported carving when metadata recovery does
-  not apply.
+  recovery engine. Validate on-disk filesystem structures instead of relying on
+  partition labels. Initially support NTFS and ext4 metadata paths, then use
+  supported photo/video carving when metadata recovery does not apply.
 - **“Common formats” needs a fixture-backed first-release catalog.** Owner:
   product and implementation. Finalize the catalog before carving work; fallback
   is to ship only validators with synthetic fixtures and label other types
