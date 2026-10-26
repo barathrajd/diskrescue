@@ -190,3 +190,38 @@ h2 { margin-bottom: 0; color: var(--paper); font-family: Georgia, serif; font-si
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
+.source-inventory {
+  margin-top: 22px;
+  padding: 24px 26px;
+  border: 1px solid var(--line);
+  background: var(--canvas-raised);
+}
+
+.inventory-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.inventory-heading h2 { margin: 7px 0 5px; font-size: 20px; }
+.inventory-heading p, .inventory-empty { margin: 0; color: var(--muted); font-size: 13px; }
+.inventory-refresh { flex: 0 0 auto; cursor: pointer; background: transparent; }
+.inventory-refresh:disabled { cursor: wait; opacity: .6; }
+.source-list { margin-top: 20px; border-top: 1px solid var(--line); }
+.source-row { display: flex; align-items: center; gap: 15px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.source-device-icon { display: grid; width: 38px; height: 38px; flex: 0 0 auto; place-items: center; border-radius: 8px; background: #232d26; color: var(--acid); }
+.source-main { display: grid; min-width: 0; flex: 1; gap: 4px; }
+.source-main strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; }
+.source-main span, .source-main small, .source-eligibility small { color: var(--muted); font-size: 12px; }
+.source-main small { overflow-wrap: anywhere; }
+.source-eligibility { display: grid; gap: 4px; max-width: 240px; color: var(--acid); font-size: 12px; text-align: right; }
+.source-eligibility.blocked { color: var(--amber); }
+.inventory-empty { padding-top: 18px; }
+
+@media (max-width: 720px) {
+  .source-inventory { padding: 18px; }
+  .source-row { align-items: flex-start; flex-wrap: wrap; }
+  .source-main { min-width: calc(100% - 60px); }
+  .source-eligibility { margin-left: 53px; max-width: none; text-align: left; }
+}

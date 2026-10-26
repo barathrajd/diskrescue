@@ -109,23 +109,25 @@ and safe export.
 2. [x] **Write an image safely.** Copy a bounded read-only source in chunks to a
    temporary file in the destination filesystem. Check free space first, report
    progress, cancel without publishing a partial image, and refuse overwrite.
-3. [ ] **Image a physical HDD.** Use a platform-specific privileged helper to
-   list identity and mount state, confirm model, serial, and capacity, then
-   revalidate the source and separate destination before imaging. Reopen the
-   completed image in the inspection flow.
-4. **Find the former volume.** Scan the image for partition and filesystem
+3. [x] **List physical sources safely.** Show available identity and mount details;
+   disable imaging when stable identity or required access is unavailable.
+4. **Image a physical HDD.** Use a platform-specific privileged helper to
+   confirm model, serial, and capacity, then revalidate the source and separate
+   destination before imaging. Reopen the completed image in the inspection
+   flow.
+5. **Find the former volume.** Scan the image for partition and filesystem
    candidates, including supported backup metadata and damaged structures.
    Show offsets, confidence reasons, and unsupported areas before recovery.
-5. **Recover metadata-backed files.** For the first supported filesystems,
+6. **Recover metadata-backed files.** For the first supported filesystems,
    list recoverable deleted entries with names and paths where metadata
    survives; let the user export selected files to a separate destination.
-6. **Carve common file formats.** Add bounded scanners and format validators
+7. **Carve common file formats.** Add bounded scanners and format validators
    for the agreed common document, photo, video, and archive catalog. Show
    generic names, file integrity status, and likely partial results.
-7. **Finish the desktop recovery session.** Add filtering, preview, progress,
+8. **Finish the desktop recovery session.** Add filtering, preview, progress,
    cancellation and resumable checkpoints; record source-image provenance and
    export results without overwriting files silently.
-8. **Verify supported platforms and safety.** Exercise image intake, scanning,
+9. **Verify supported platforms and safety.** Exercise image intake, scanning,
    cancellation, and export on Windows, macOS, and Linux with synthetic images;
    document platform gaps and ensure unsupported paths fail closed.
 

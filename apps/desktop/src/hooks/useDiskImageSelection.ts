@@ -15,6 +15,22 @@ export type ImageReview = {
   gptPartitionCount: number;
 };
 
+export type PhysicalSource = {
+  id: string;
+  model: string | null;
+  serial: string | null;
+  capacityBytes: number;
+  mountStateKnown: boolean;
+  systemStateKnown: boolean;
+  isSystem: boolean;
+  mountPoints: string[];
+  eligibilityReason: string | null;
+};
+
+export async function listPhysicalSources() {
+  return invoke<PhysicalSource[]>('list_physical_sources');
+}
+
 export function useDiskImageSelection() {
   const [selectedImage, setSelectedImage] = useState<SelectedImage | null>(null);
   const [imageReview, setImageReview] = useState<ImageReview | null>(null);

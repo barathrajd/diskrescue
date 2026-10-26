@@ -610,8 +610,10 @@ dependencies = [
 name = "diskrescue-desktop"
 version = "0.1.0"
 dependencies = [
+ "plist",
  "recovery-core",
  "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-dialog",

@@ -1,4 +1,5 @@
-import { useDiskImageSelection } from './hooks/useDiskImageSelection';
+import { useState } from 'react';
+import { listPhysicalSources, useDiskImageSelection, type PhysicalSource } from './hooks/useDiskImageSelection';
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 bytes';
@@ -15,6 +16,21 @@ function formatBytes(bytes: number): string {
 
 function App() {
   const { selectedImage, imageReview, message, chooseImage } = useDiskImageSelection();
+  const [physicalSources, setPhysicalSources] = useState<PhysicalSource[] | null>(null);
+  const [sourceMessage, setSourceMessage] = useState('');
+  const [sourcesLoading, setSourcesLoading] = useState(false);
+
+  async function refreshPhysicalSources() {
+    setSourceMessage('');
+    setSourcesLoading(true);
+    try {
+      setPhysicalSources(await listPhysicalSources());
+    } catch (error) {
+      setSourceMessage(error instanceof Error ? error.message : 'Could not list physical disks.');
+    } finally {
+      setSourcesLoading(false);
+    }
+  }
 
   return (
     <main className="app-shell">
@@ -147,10 +163,44 @@ function App() {
             </aside>
           </div>
 
+          <section className="source-inventory" aria-labelledby="physical-sources-heading">
+            <div className="inventory-heading">
+              <div>
+                <div className="panel-kicker">SOURCE / 02 · METADATA ONLY</div>
+                <h2 id="physical-sources-heading">Physical disks</h2>
+                <p>View device identity and mount state. This step does not read disk contents.</p>
+              </div>
+              <button className="browse-button inventory-refresh" onClick={refreshPhysicalSources} disabled={sourcesLoading} type="button">
+                {sourcesLoading ? 'Checking…' : 'List disks'} <span aria-hidden="true">↻</span>
+              </button>
+            </div>
+            {sourceMessage && <p className="input-message" role="alert">{sourceMessage}</p>}
+            {physicalSources && (physicalSources.length === 0 ? (
+              <p className="inventory-empty" aria-live="polite">No physical disks were reported by this system.</p>
+            ) : (
+              <div className="source-list" aria-live="polite">
+                {physicalSources.map((source) => (
+                  <article className="source-row" key={source.id}>
+                    <div className="source-device-icon" aria-hidden="true">▤</div>
+                    <div className="source-main">
+                      <strong>{source.model ?? 'Model unavailable'}</strong>
+                      <span>{source.id} · {formatBytes(source.capacityBytes)}</span>
+                      <small>Serial: {source.serial ?? 'Unavailable'} · {source.isSystem ? 'System disk' : source.systemStateKnown ? 'Not system disk' : 'System state unknown'} · {source.mountPoints.length ? `Mounted at ${source.mountPoints.join(', ')}` : source.mountStateKnown ? 'No mounted volumes found' : 'Mount state unknown'}</small>
+                    </div>
+                    <div className={source.eligibilityReason ? 'source-eligibility blocked' : 'source-eligibility'}>
+                      <span>{source.eligibilityReason ?? 'Metadata checks passed'}</span>
+                      <small>Imaging helper not yet available</small>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            ))}
+          </section>
+
           <section className="build-note" aria-label="Preview build status">
             <span className="build-note-mark" aria-hidden="true">i</span>
-            <p><strong>Preview build.</strong> Image selection and basic MBR/GPT inspection are ready. Physical imaging and file recovery are still in development.</p>
-            <span className="build-note-id">MILESTONE 01 / FOUNDATION</span>
+            <p><strong>Preview build.</strong> Image selection, basic MBR/GPT inspection and physical disk metadata listing are ready. Physical imaging and file recovery are still in development.</p>
+            <span className="build-note-id">MILESTONE 03 / SOURCE INVENTORY</span>
           </section>
         </div>
 
