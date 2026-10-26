@@ -53,40 +53,19 @@ fn identify_ntfs<R: ReadAt>(
     }
     let mut boot_sector = [0_u8; 512];
     reader.read_exact_at(offset, &mut boot_sector)?;
-    let bytes_per_sector = u16::from_le_bytes([boot_sector[11], boot_sector[12]]);
-    let sectors_per_cluster = boot_sector[13];
-    let total_sectors = u64::from_le_bytes(boot_sector[40..48].try_into().unwrap());
-    let mft_cluster = u64::from_le_bytes(boot_sector[48..56].try_into().unwrap());
-    let mft_mirror_cluster = u64::from_le_bytes(boot_sector[56..64].try_into().unwrap());
-    let volume_bytes = total_sectors.checked_mul(u64::from(bytes_per_sector));
-    let cluster_count = if sectors_per_cluster == 0 {
-        0
-    } else {
-        total_sectors / u64::from(sectors_per_cluster)
-    };
-    let structurally_valid = &boot_sector[3..11] == b"NTFS    "
-        && matches!(bytes_per_sector, 512 | 1024 | 2048 | 4096)
-        && sectors_per_cluster.is_power_of_two()
-        && sectors_per_cluster != 0
-        && total_sectors != 0
-        && volume_bytes.is_some_and(|bytes| bytes <= partition_length_bytes)
-        && mft_cluster < cluster_count
-        && mft_mirror_cluster < cluster_count
-        && boot_sector[510..512] == [0x55, 0xaa];
-    if !structurally_valid {
+    let Ok(parsed) = fs_ntfs::parse_boot_sector(&boot_sector, partition_length_bytes) else {
         return Ok(None);
-    }
+    };
 
     Ok(Some(FileSystemCandidate {
         kind: FileSystemKind::Ntfs,
         offset_bytes: offset,
-        length_bytes: volume_bytes.unwrap(),
+        length_bytes: parsed.volume_size_bytes,
         confidence: "high",
         reasons: vec![
             "NTFS OEM identifier is present",
-            "sector and cluster sizes are supported",
-            "MFT locations and volume bounds are consistent",
-            "boot-sector signature is valid",
+            "sector, cluster, MFT, and file-record geometry is consistent",
+            "volume bounds and boot-sector signature are valid",
         ],
     }))
 }
@@ -186,6 +165,7 @@ mod tests {
         boot[40..48].copy_from_slice(&48_u64.to_le_bytes());
         boot[48..56].copy_from_slice(&2_u64.to_le_bytes());
         boot[56..64].copy_from_slice(&3_u64.to_le_bytes());
+        boot[64] = 1;
         boot[510..512].copy_from_slice(&[0x55, 0xaa]);
 
         let candidate = identify_filesystem(&MemoryReader(image), 4096, 24 * 1024)
@@ -196,7 +176,7 @@ mod tests {
         assert_eq!(candidate.offset_bytes, 4096);
         assert_eq!(candidate.length_bytes, 48 * 512);
         assert_eq!(candidate.confidence, "high");
-        assert_eq!(candidate.reasons.len(), 4);
+        assert_eq!(candidate.reasons.len(), 3);
     }
 
     #[test]
@@ -209,6 +189,7 @@ mod tests {
         boot[40..48].copy_from_slice(&32_u64.to_le_bytes());
         boot[48..56].copy_from_slice(&4_u64.to_le_bytes());
         boot[56..64].copy_from_slice(&3_u64.to_le_bytes());
+        boot[64] = 1;
         boot[510..512].copy_from_slice(&[0x55, 0xaa]);
 
         let candidate = identify_filesystem(&MemoryReader(image), 0, 32 * 512).unwrap();

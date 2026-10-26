@@ -2214,6 +2214,7 @@ name = "partition-hunter"
 version = "0.1.0"
 dependencies = [
  "disk-reader",
+ "fs-ntfs",
 ]
 
 [[package]]

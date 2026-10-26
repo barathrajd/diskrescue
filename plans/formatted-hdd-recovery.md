@@ -121,7 +121,7 @@ and safe export.
    - [ ] Add platform-specific helper authorization and source revalidation.
    - [ ] Confirm the destination is on a different physical device and reopen
      the completed image in the inspection flow.
-5. **Find the former volume.** Scan the image for partition and filesystem
+5. [x] **Find the former volume.** Scan the image for partition and filesystem
    candidates, including supported backup metadata and damaged structures.
    Show offsets, confidence reasons, and unsupported areas before recovery.
    - [x] Inspect MBR/GPT partition entries and check partition starts for
@@ -133,6 +133,12 @@ and safe export.
 6. **Recover metadata-backed files.** For the first supported filesystems,
    list recoverable deleted entries with names and paths where metadata
    survives; let the user export selected files to a separate destination.
+   - [x] Parse NTFS boot-sector geometry and validate the partition and MFT
+     bounds.
+   - [ ] Validate MFT record update-sequence fixups and list deleted
+     `$FILE_NAME` metadata entries with parent references.
+   - [ ] Resolve surviving parent paths and recover supported data streams to
+     a separate destination.
 7. **Carve common file formats.** Add bounded scanners and format validators
    for the agreed common document, photo, video, and archive catalog. Show
    generic names, file integrity status, and likely partial results.

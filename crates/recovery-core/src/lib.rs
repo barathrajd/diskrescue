@@ -29,6 +29,7 @@ mod tests {
         boot[40..48].copy_from_slice(&32_u64.to_le_bytes());
         boot[48..56].copy_from_slice(&2_u64.to_le_bytes());
         boot[56..64].copy_from_slice(&3_u64.to_le_bytes());
+        boot[64] = 1;
         boot[510..512].copy_from_slice(&[0x55, 0xaa]);
         fs::write(&path, image).unwrap();
 
@@ -147,6 +148,7 @@ mod tests {
         boot[40..48].copy_from_slice(&32_u64.to_le_bytes());
         boot[48..56].copy_from_slice(&2_u64.to_le_bytes());
         boot[56..64].copy_from_slice(&3_u64.to_le_bytes());
+        boot[64] = 1;
         boot[510..512].copy_from_slice(&[0x55, 0xaa]);
         fs::write(&path, image).unwrap();
 
