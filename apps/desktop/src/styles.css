@@ -8,8 +8,8 @@
   --canvas: #111713;
   --canvas-raised: #171f1a;
   --line: #2a342e;
-  --muted: #89958b;
-  --quiet: #667168;
+  --muted: #a1ada2;
+  --quiet: #879389;
   --paper: #e9ede6;
   --acid: #c7e36a;
   --amber: #e6b15f;
@@ -312,4 +312,99 @@ h2 { margin-bottom: 0; color: var(--paper); font-family: Georgia, serif; font-si
   .recovery-browser-heading { align-items: flex-start; flex-direction: column; }
   .results-toolbar { align-items: flex-start; }
   .recovery-action-bar { align-items: flex-start; flex-direction: column; }
+}
+
+/* Keep the workspace readable on high-resolution desktop displays. */
+.rail-section-label, .offline-mark, .breadcrumb, .topbar-status { font-size: 11px; }
+.rail-version, .panel-kicker, .panel-status, .safety-tag, .step-state, .build-note-id { font-size: 10px; }
+.nav-item { font-size: 14px; }
+.topbar { height: 66px; flex-basis: 66px; }
+.content { width: min(1540px, 100%); padding: 40px 42px 36px; }
+.eyebrow { font-size: 11px; }
+h1 { font-size: clamp(40px, 4vw, 62px); }
+.hero-description { max-width: 720px; font-size: 16px; line-height: 1.65; }
+.hero-index-caption { font-size: 10px; }
+.safety-strip { min-height: 78px; padding: 16px 20px; }
+.safety-copy strong { font-size: 14px; }
+.safety-copy span { font-size: 13px; }
+.work-grid { gap: 20px; }
+.image-panel { padding: 28px 28px 0; }
+.panel-heading { margin-bottom: 24px; }
+h2, .inventory-heading h2 { font-size: 25px; }
+.panel-status { font-size: 10px; }
+.dropzone { min-height: 190px; }
+.drop-title { font-size: 16px; }
+.drop-subtitle { font-size: 12px; }
+.browse-button { font-size: 11px; padding: 9px 14px; }
+.image-panel-footer { margin-right: -28px; margin-left: -28px; padding: 15px 28px; font-size: 10px; }
+.file-details strong { font-size: 14px; }
+.file-details span { font-size: 11px; }
+.text-button { font-size: 12px; }
+.input-message { font-size: 13px; }
+.image-review strong { font-size: 13px; }
+.image-review small, .image-review span { font-size: 10px; }
+.workflow-panel { padding: 28px 24px 22px; }
+.workflow-panel h2 { font-size: 23px; }
+.workflow-list li { min-height: 64px; grid-template-columns: 32px 1fr auto; }
+.step-number { font-size: 18px; }
+.step-copy strong { font-size: 13px; }
+.step-copy small { font-size: 11px; }
+.workflow-note p { font-size: 11px; }
+.build-note p { font-size: 11px; }
+.footer { font-size: 9px; }
+.source-inventory { padding: 28px 32px; }
+.inventory-heading { gap: 24px; }
+.inventory-heading p, .inventory-empty { font-size: 15px; line-height: 1.5; }
+.source-row { gap: 18px; padding: 20px 0; }
+.source-main { gap: 6px; }
+.source-main strong { font-size: 17px; }
+.source-main span, .source-main small, .source-eligibility small { font-size: 13px; }
+.source-eligibility { max-width: 300px; font-size: 14px; }
+.source-select-button { padding: 10px 14px; font-size: 12px; }
+.source-safety-note { font-size: 13px; }
+.scan-actions p { font-size: 14px; }
+.scan-results-heading { font-size: 14px; }
+.scan-results-heading span, .scan-empty, .scan-limitation { font-size: 13px; }
+.scan-result-main strong { font-size: 14px; }
+.scan-result-main span, .scan-result-main small, .scan-confidence { font-size: 12px; }
+.scan-warning { font-size: 13px; }
+.recovery-browser-heading { padding: 26px 30px; }
+.recovery-browser-heading h2 { font-size: 28px; }
+.feature-status { font-size: 10px; }
+.recovery-browser-body { grid-template-columns: 220px minmax(0, 1fr); }
+.recovery-filters { padding: 20px 14px; }
+.filter-mode span { padding: 9px 6px; font-size: 12px; }
+.file-category { grid-template-columns: 24px 1fr auto; min-height: 54px; }
+.file-category > span { font-size: 17px; }
+.file-category strong { font-size: 13px; }
+.file-category small { font-size: 10px; }
+.results-toolbar { padding: 18px 24px; }
+.results-toolbar strong { font-size: 14px; }
+.results-toolbar span { font-size: 12px; }
+.filter-button, .results-search input { font-size: 12px; }
+.results-search { margin: 16px 24px 0; padding: 11px 13px; }
+.file-results-empty { min-height: 270px; }
+.file-results-empty h3 { font-size: 23px; }
+.file-results-empty > p { max-width: 560px; font-size: 13px; }
+.volume-summary, .browser-scan-progress > div { font-size: 10px; }
+.browser-scan-progress small { font-size: 10px; }
+.recovery-action-bar { padding: 16px 22px; }
+.recovery-action-bar strong { font-size: 12px; }
+.recovery-action-bar small { font-size: 10px; }
+.recovery-action-bar button { padding: 11px 16px; font-size: 12px; }
+
+@media (max-width: 1050px) {
+  .content { padding: 32px 28px; }
+  .source-row { align-items: flex-start; flex-wrap: wrap; }
+  .source-eligibility { margin-left: 56px; max-width: calc(100% - 56px); text-align: left; }
+  .source-select-button { margin-left: 56px; }
+}
+
+@media (max-width: 820px) {
+  .content { padding: 28px 18px; }
+  .hero-description { font-size: 14px; }
+  .inventory-heading { align-items: flex-start; flex-direction: column; }
+  .source-eligibility { margin-left: 0; max-width: 100%; }
+  .source-select-button { margin-left: 0; }
+  .footer { font-size: 8px; }
 }
