@@ -124,8 +124,10 @@ and safe export.
    Show offsets, confidence reasons, and unsupported areas before recovery.
    - [x] Inspect MBR/GPT partition entries and check partition starts for
      structurally consistent NTFS or ext4 signatures.
-   - [ ] Search backup GPT metadata and image regions for lost partition starts;
-     report unreadable and unsupported areas.
+   - [x] Recover partition entries from a valid backup GPT when the primary GPT
+     header or table is damaged.
+   - [ ] Search image regions for lost filesystem starts when partition tables
+     are unavailable; report unreadable and unsupported areas.
 6. **Recover metadata-backed files.** For the first supported filesystems,
    list recoverable deleted entries with names and paths where metadata
    survives; let the user export selected files to a separate destination.

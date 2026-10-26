@@ -87,8 +87,26 @@ pub fn parse_mbr<R: ReadAt>(reader: &R) -> io::Result<Mbr> {
 }
 
 pub fn parse_gpt<R: ReadAt>(reader: &R) -> io::Result<Gpt> {
+    parse_gpt_at(reader, 1, false)
+}
+
+pub fn parse_backup_gpt<R: ReadAt>(reader: &R) -> io::Result<Gpt> {
+    let image_sectors = reader.len() / SECTOR_SIZE as u64;
+    let header_lba = image_sectors.checked_sub(1).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "image is too small for backup GPT",
+        )
+    })?;
+    parse_gpt_at(reader, header_lba, true)
+}
+
+fn parse_gpt_at<R: ReadAt>(reader: &R, header_lba: u64, backup: bool) -> io::Result<Gpt> {
     let mut header = [0_u8; SECTOR_SIZE];
-    reader.read_exact_at(SECTOR_SIZE as u64, &mut header)?;
+    let header_offset = header_lba
+        .checked_mul(SECTOR_SIZE as u64)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "GPT header offset overflows"))?;
+    reader.read_exact_at(header_offset, &mut header)?;
     if &header[0..8] != GPT_SIGNATURE {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -122,9 +140,14 @@ pub fn parse_gpt<R: ReadAt>(reader: &R) -> io::Result<Gpt> {
     let entry_size = read_u32(&header, 84);
     let expected_entries_crc = read_u32(&header, 88);
     let image_sectors = reader.len() / SECTOR_SIZE as u64;
+    let expected_backup_lba = if backup {
+        1
+    } else {
+        image_sectors.saturating_sub(1)
+    };
 
-    if current_lba != 1
-        || backup_lba == current_lba
+    if current_lba != header_lba
+        || backup_lba != expected_backup_lba
         || backup_lba >= image_sectors
         || first_usable_lba > last_usable_lba
         || last_usable_lba >= image_sectors
@@ -157,10 +180,16 @@ pub fn parse_gpt<R: ReadAt>(reader: &R) -> io::Result<Gpt> {
     let first_usable_offset = first_usable_lba
         .checked_mul(SECTOR_SIZE as u64)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "usable LBA overflows"))?;
-    if entries_end > first_usable_offset {
+    let last_usable_end = last_usable_lba
+        .checked_add(1)
+        .and_then(|lba| lba.checked_mul(SECTOR_SIZE as u64))
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "usable LBA overflows"))?;
+    if (!backup && entries_end > first_usable_offset)
+        || (backup && (entries_offset < last_usable_end || entries_end > header_offset))
+    {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            "GPT partition table overlaps the usable LBA range",
+            "GPT partition table overlaps a protected metadata range",
         ));
     }
 
@@ -227,4 +256,70 @@ fn crc32(bytes: &[u8]) -> u32 {
         }
     }
     !crc
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Gpt, crc32, parse_backup_gpt};
+    use disk_reader::ReadAt;
+    use std::io;
+
+    struct MemoryReader(Vec<u8>);
+
+    impl ReadAt for MemoryReader {
+        fn len(&self) -> u64 {
+            self.0.len() as u64
+        }
+
+        fn read_exact_at(&self, offset: u64, buffer: &mut [u8]) -> io::Result<()> {
+            let start = usize::try_from(offset)
+                .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "offset too large"))?;
+            let end = start.checked_add(buffer.len()).ok_or_else(|| {
+                io::Error::new(io::ErrorKind::InvalidInput, "read range overflows")
+            })?;
+            let source = self
+                .0
+                .get(start..end)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::UnexpectedEof, "short image"))?;
+            buffer.copy_from_slice(source);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn parses_backup_gpt_when_primary_header_is_damaged() {
+        let mut image = vec![0_u8; 256 * 512];
+        let mut entry = [0_u8; 128];
+        entry[0] = 1;
+        entry[16] = 2;
+        entry[32..40].copy_from_slice(&34_u64.to_le_bytes());
+        entry[40..48].copy_from_slice(&100_u64.to_le_bytes());
+        let table_crc = crc32(&entry);
+        image[223 * 512..223 * 512 + 128].copy_from_slice(&entry);
+
+        let header = &mut image[255 * 512..256 * 512];
+        header[0..8].copy_from_slice(b"EFI PART");
+        header[8..12].copy_from_slice(&0x0001_0000_u32.to_le_bytes());
+        header[12..16].copy_from_slice(&92_u32.to_le_bytes());
+        header[24..32].copy_from_slice(&255_u64.to_le_bytes());
+        header[32..40].copy_from_slice(&1_u64.to_le_bytes());
+        header[40..48].copy_from_slice(&34_u64.to_le_bytes());
+        header[48..56].copy_from_slice(&222_u64.to_le_bytes());
+        header[72..80].copy_from_slice(&223_u64.to_le_bytes());
+        header[80..84].copy_from_slice(&1_u32.to_le_bytes());
+        header[84..88].copy_from_slice(&128_u32.to_le_bytes());
+        header[88..92].copy_from_slice(&table_crc.to_le_bytes());
+        let mut checksum_header = header[..92].to_vec();
+        checksum_header[16..20].fill(0);
+        let header_crc = crc32(&checksum_header);
+        header[16..20].copy_from_slice(&header_crc.to_le_bytes());
+
+        let gpt: Gpt = parse_backup_gpt(&MemoryReader(image)).unwrap();
+
+        assert_eq!(gpt.current_lba, 255);
+        assert_eq!(gpt.backup_lba, 1);
+        assert_eq!(gpt.partitions.len(), 1);
+        assert_eq!(gpt.partitions[0].first_lba, 34);
+        assert_eq!(gpt.partitions[0].last_lba, 100);
+    }
 }

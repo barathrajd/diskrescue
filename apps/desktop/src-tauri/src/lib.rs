@@ -476,12 +476,20 @@ struct FilesystemReview {
 #[tauri::command]
 fn inspect_image(path: String) -> Result<ImageReview, String> {
     let inspection = recovery_core::inspect_image(path).map_err(|error| error.to_string())?;
+    let gpt_source = inspection.gpt_source;
     let (mbr_status, mbr_partition_count) = match inspection.mbr {
         Ok(mbr) => ("Valid MBR".to_owned(), mbr.partitions.len()),
         Err(error) => (format!("Unreadable: {error}"), 0),
     };
     let (gpt_status, gpt_partition_count) = match inspection.gpt {
-        Ok(gpt) => ("Valid GPT".to_owned(), gpt.partitions.len()),
+        Ok(gpt) => (
+            if gpt_source == Some("backup") {
+                "Valid backup GPT".to_owned()
+            } else {
+                "Valid GPT".to_owned()
+            },
+            gpt.partitions.len(),
+        ),
         Err(error) if error == "GPT not indicated by a protective MBR" => {
             ("Not present".to_owned(), 0)
         }
