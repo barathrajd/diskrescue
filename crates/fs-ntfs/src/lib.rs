@@ -64,6 +64,69 @@ pub struct NtfsFileRecord {
     pub data_size_bytes: Option<u64>,
 }
 
+/// Decodes a bounded NTFS nonresident data runlist into `(starting_cluster,
+/// cluster_count)` extents. Sparse runs are rejected because this initial
+/// reader does not yet map sparse streams.
+pub fn parse_data_runlist(bytes: &[u8]) -> Result<Vec<(u64, u64)>, NtfsError> {
+    let mut runs = Vec::new();
+    let mut cursor = 0_usize;
+    let mut current_lcn = 0_i64;
+    loop {
+        let header = *bytes.get(cursor).ok_or(NtfsError::InvalidAttribute)?;
+        cursor = cursor.checked_add(1).ok_or(NtfsError::ArithmeticOverflow)?;
+        if header == 0 {
+            return Ok(runs);
+        }
+        let length_bytes = usize::from(header & 0x0f);
+        let offset_bytes = usize::from(header >> 4);
+        if length_bytes == 0 || length_bytes > 8 || offset_bytes == 0 || offset_bytes > 8 {
+            return Err(NtfsError::InvalidAttribute);
+        }
+        let length_end = cursor
+            .checked_add(length_bytes)
+            .ok_or(NtfsError::ArithmeticOverflow)?;
+        let offset_end = length_end
+            .checked_add(offset_bytes)
+            .ok_or(NtfsError::ArithmeticOverflow)?;
+        if offset_end > bytes.len() {
+            return Err(NtfsError::InvalidAttribute);
+        }
+        let count = decode_unsigned(&bytes[cursor..length_end])?;
+        if count == 0 {
+            return Err(NtfsError::InvalidAttribute);
+        }
+        let delta = decode_signed(&bytes[length_end..offset_end])?;
+        current_lcn = current_lcn
+            .checked_add(delta)
+            .ok_or(NtfsError::ArithmeticOverflow)?;
+        if current_lcn < 0 {
+            return Err(NtfsError::InvalidAttribute);
+        }
+        runs.push((
+            u64::try_from(current_lcn).map_err(|_| NtfsError::ArithmeticOverflow)?,
+            count,
+        ));
+        cursor = offset_end;
+    }
+}
+
+fn decode_unsigned(bytes: &[u8]) -> Result<u64, NtfsError> {
+    let mut value = [0_u8; 8];
+    value[..bytes.len()].copy_from_slice(bytes);
+    Ok(u64::from_le_bytes(value))
+}
+
+fn decode_signed(bytes: &[u8]) -> Result<i64, NtfsError> {
+    let fill = if bytes.last().is_some_and(|byte| byte & 0x80 != 0) {
+        0xff
+    } else {
+        0
+    };
+    let mut value = [fill; 8];
+    value[..bytes.len()].copy_from_slice(bytes);
+    Ok(i64::from_le_bytes(value))
+}
+
 /// Parses a fixed-up NTFS FILE record and its resident metadata attributes.
 pub fn parse_file_record(
     record: &[u8],
@@ -349,6 +412,17 @@ mod tests {
         record[510..512].copy_from_slice(&0x7777_u16.to_le_bytes());
 
         assert!(parse_file_record(&record, 42, 512).is_err());
+    }
+
+    #[test]
+    fn parses_signed_ntfs_data_runlist_extents() {
+        let runs = super::parse_data_runlist(&[0x11, 3, 5, 0x11, 2, 4, 0]).unwrap();
+        assert_eq!(runs, vec![(5, 3), (9, 2)]);
+    }
+
+    #[test]
+    fn rejects_ntfs_data_runlist_with_truncated_fields() {
+        assert!(super::parse_data_runlist(&[0x11, 3]).is_err());
     }
 
     fn synthetic_file_record(name: &str, parent_record: u64, in_use: bool) -> [u8; 1024] {

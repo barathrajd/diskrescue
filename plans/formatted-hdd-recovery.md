@@ -137,6 +137,8 @@ and safe export.
      bounds.
    - [x] Validate MFT record update-sequence fixups and parse `$FILE_NAME`
      metadata with parent references.
+   - [x] Decode bounded, signed NTFS data runlists for nonresident stream
+     extents.
    - [ ] Read the MFT and list deleted entries from parsed records.
    - [ ] Resolve surviving parent paths and recover supported data streams to
      a separate destination.
