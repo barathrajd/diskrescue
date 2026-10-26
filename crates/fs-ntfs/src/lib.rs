@@ -62,6 +62,7 @@ pub struct NtfsFileRecord {
     pub name: Option<String>,
     pub parent_record_number: Option<u64>,
     pub data_size_bytes: Option<u64>,
+    pub data_runs: Vec<(u64, u64)>,
 }
 
 /// Parses a bounded sequence of fixed-size MFT records and returns entries
@@ -219,6 +220,7 @@ pub fn parse_file_record(
         name: None,
         parent_record_number: None,
         data_size_bytes: None,
+        data_runs: Vec::new(),
     };
     let mut pos = first_attr;
     while pos
@@ -285,6 +287,11 @@ pub fn parse_file_record(
                 if length < 56 {
                     return Err(NtfsError::InvalidAttribute);
                 }
+                let runlist_offset = usize::from(read_u16(&fixed, pos + 32));
+                if runlist_offset < 64 || runlist_offset >= length {
+                    return Err(NtfsError::InvalidAttribute);
+                }
+                result.data_runs = parse_data_runlist(&fixed[pos + runlist_offset..end])?;
                 read_u64(&fixed, pos + 48)
             } else {
                 if length < 24 {
@@ -437,6 +444,16 @@ mod tests {
     }
 
     #[test]
+    fn parses_the_mft_data_runlist_from_a_nonresident_data_attribute() {
+        let record = synthetic_mft_base_record();
+
+        let parsed = parse_file_record(&record, 0, 512).unwrap();
+
+        assert_eq!(parsed.data_size_bytes, Some(1024));
+        assert_eq!(parsed.data_runs, vec![(5, 1), (12, 2)]);
+    }
+
+    #[test]
     fn lists_only_deleted_file_records_from_a_bounded_mft_window() {
         let mut mft = Vec::new();
         mft.extend_from_slice(&synthetic_file_record("live.jpg", 5, true));
@@ -504,6 +521,31 @@ mod tests {
             value[offset..offset + 2].copy_from_slice(&character.to_le_bytes());
         }
         record[168..172].copy_from_slice(&u32::MAX.to_le_bytes());
+        record[510..512].copy_from_slice(&0xaaaa_u16.to_le_bytes());
+        record[1022..1024].copy_from_slice(&0xaaaa_u16.to_le_bytes());
+        record
+    }
+
+    fn synthetic_mft_base_record() -> [u8; 1024] {
+        let mut record = [0_u8; 1024];
+        record[0..4].copy_from_slice(b"FILE");
+        record[4..6].copy_from_slice(&48_u16.to_le_bytes());
+        record[6..8].copy_from_slice(&3_u16.to_le_bytes());
+        record[48..50].copy_from_slice(&0xaaaa_u16.to_le_bytes());
+        record[50..52].copy_from_slice(&0x1111_u16.to_le_bytes());
+        record[52..54].copy_from_slice(&0x2222_u16.to_le_bytes());
+        record[20..22].copy_from_slice(&56_u16.to_le_bytes());
+        record[24..28].copy_from_slice(&140_u32.to_le_bytes());
+        record[28..32].copy_from_slice(&1024_u32.to_le_bytes());
+        let attribute = &mut record[56..136];
+        attribute[0..4].copy_from_slice(&0x80_u32.to_le_bytes());
+        attribute[4..8].copy_from_slice(&80_u32.to_le_bytes());
+        attribute[8] = 1;
+        attribute[32..34].copy_from_slice(&64_u16.to_le_bytes());
+        attribute[48..56].copy_from_slice(&1024_u64.to_le_bytes());
+        attribute[64..70].copy_from_slice(&[0x11, 1, 5, 0x11, 2, 7]);
+        attribute[70] = 0;
+        record[136..140].copy_from_slice(&u32::MAX.to_le_bytes());
         record[510..512].copy_from_slice(&0xaaaa_u16.to_le_bytes());
         record[1022..1024].copy_from_slice(&0xaaaa_u16.to_le_bytes());
         record

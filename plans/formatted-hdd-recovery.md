@@ -202,8 +202,10 @@ and safe export.
      extents.
    - [x] Parse bounded MFT record windows and list deleted records while
      ignoring unused slots.
-   - [ ] Map the MFT data stream from its runlist, read records from the image,
-     and list deleted entries end to end.
+   - [x] Parse the unnamed nonresident `$DATA` runlist and size from an MFT
+     base record.
+   - [ ] Map MFT extents to bounded image reads and list deleted entries end
+     to end.
    - [ ] Resolve surviving parent paths and recover supported data streams to
      a separate destination.
 7. **Carve common file formats.** Add bounded scanners and format validators
