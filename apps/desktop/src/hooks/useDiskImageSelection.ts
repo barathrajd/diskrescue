@@ -66,6 +66,15 @@ export type LostImageScan = {
   candidates: PartitionFinding[];
 };
 
+export type DeletedFileEntry = {
+  recordNumber: number;
+  sequenceNumber: number;
+  isDirectory: boolean;
+  name: string | null;
+  parentRecordNumber: number | null;
+  dataSizeBytes: number | null;
+};
+
 export async function listPhysicalSources() {
   return invoke<PhysicalSource[]>('list_physical_sources');
 }
@@ -76,6 +85,14 @@ export async function scanImage(path: string) {
 
 export async function searchLostFilesystems(path: string) {
   return invoke<LostImageScan>('search_lost_filesystems', { path });
+}
+
+export async function scanNtfsDeletedFiles(path: string, partitionOffsetBytes: number, partitionLengthBytes: number) {
+  return invoke<DeletedFileEntry[]>('scan_ntfs_deleted_files', {
+    path,
+    partitionOffsetBytes,
+    partitionLengthBytes,
+  });
 }
 
 export async function cancelLostFilesystemSearch() {

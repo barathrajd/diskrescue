@@ -254,7 +254,7 @@ h2 { margin-bottom: 0; color: var(--paper); font-family: Georgia, serif; font-si
 .filter-mode { display: grid; grid-template-columns: 1fr 1fr; margin-bottom: 17px; padding: 3px; border: 1px solid #344036; background: #111813; }
 .filter-mode span { padding: 7px 5px; color: var(--quiet); font-family: "SFMono-Regular", Consolas, monospace; font-size: 9px; text-align: center; }
 .filter-mode span:first-child { background: #28352a; color: var(--acid); }
-.file-category { display: grid; grid-template-columns: 20px 1fr auto; align-items: center; gap: 7px; min-height: 43px; padding: 0 8px; border-bottom: 1px solid rgb(44 55 48 / 72%); color: #7f8b81; }
+.file-category { display: grid; width: 100%; grid-template-columns: 20px 1fr auto; align-items: center; gap: 7px; min-height: 43px; padding: 0 8px; border: 0; border-bottom: 1px solid rgb(44 55 48 / 72%); background: transparent; color: #7f8b81; font: inherit; text-align: left; cursor: pointer; }
 .file-category > span { color: #809082; font-size: 14px; }
 .file-category strong { font-size: 10px; font-weight: 500; }
 .file-category small { color: #687469; font-size: 8px; }
@@ -295,6 +295,14 @@ h2 { margin-bottom: 0; color: var(--paper); font-family: Georgia, serif; font-si
 .recovery-action-bar small { color: var(--muted); font-size: 8px; }
 .recovery-action-bar button { padding: 9px 13px; border: 1px solid #4a554b; background: #252c26; color: #7f897f; font: inherit; font-size: 9px; }
 .recovery-action-bar button:disabled { cursor: not-allowed; }
+.deleted-file-list { display: grid; align-content: start; gap: 0; padding: 8px 20px 16px; }
+.deleted-file-row { display: grid; grid-template-columns: 28px minmax(160px, 1fr) minmax(80px, auto) minmax(110px, auto); align-items: center; gap: 12px; padding: 11px 4px; border-bottom: 1px solid #2b352d; }
+.deleted-file-icon { display: grid; width: 26px; height: 30px; place-items: center; border: 1px solid #3c4a3d; color: var(--acid); }
+.deleted-file-name { display: grid; min-width: 0; gap: 4px; }
+.deleted-file-name strong { overflow: hidden; color: #d5dfd4; font-size: 10px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
+.deleted-file-name small, .deleted-file-size, .deleted-file-state { color: var(--muted); font-size: 8px; }
+.deleted-file-state { color: #c3a36c; text-align: right; }
+.deleted-file-list .scan-limitation { margin-top: 12px; }
 
 @media (max-width: 720px) {
   .source-inventory { padding: 18px; }
@@ -302,6 +310,9 @@ h2 { margin-bottom: 0; color: var(--paper); font-family: Georgia, serif; font-si
   .source-main { min-width: calc(100% - 60px); }
   .source-eligibility { margin-left: 53px; max-width: calc(100% - 53px); text-align: left; }
   .source-select-button { margin-left: 53px; }
+  .deleted-file-row { grid-template-columns: 28px minmax(0, 1fr) auto; }
+  .deleted-file-size { grid-column: 2; }
+  .deleted-file-state { grid-column: 3; grid-row: 2; }
 }
 
 @media (max-width: 820px) {

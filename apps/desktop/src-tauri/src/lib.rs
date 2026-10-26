@@ -543,6 +543,17 @@ struct LostScanReview {
     candidates: Vec<PartitionReview>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct DeletedFileReview {
+    record_number: u64,
+    sequence_number: u16,
+    is_directory: bool,
+    name: Option<String>,
+    parent_record_number: Option<u64>,
+    data_size_bytes: Option<u64>,
+}
+
 #[tauri::command]
 fn inspect_image(path: String) -> Result<ImageReview, String> {
     let inspection = recovery_core::inspect_image(path).map_err(|error| error.to_string())?;
@@ -589,6 +600,29 @@ fn scan_image(path: String) -> Result<ScanReview, String> {
         gpt_error: scan.gpt_error,
         partitions,
     })
+}
+
+#[tauri::command]
+fn scan_ntfs_deleted_files(
+    path: String,
+    partition_offset_bytes: u64,
+    partition_length_bytes: u64,
+) -> Result<Vec<DeletedFileReview>, String> {
+    recovery_core::scan_ntfs_deleted_files(&path, partition_offset_bytes, partition_length_bytes)
+        .map(|entries| {
+            entries
+                .into_iter()
+                .map(|entry| DeletedFileReview {
+                    record_number: entry.record_number,
+                    sequence_number: entry.sequence_number,
+                    is_directory: entry.is_directory,
+                    name: entry.name,
+                    parent_record_number: entry.parent_record_number,
+                    data_size_bytes: entry.data_size_bytes,
+                })
+                .collect()
+        })
+        .map_err(|error| error.to_string())
 }
 
 fn partition_review(partition: recovery_core::PartitionFinding) -> PartitionReview {
@@ -663,6 +697,7 @@ pub fn run() {
             inspect_image,
             list_physical_sources,
             scan_image,
+            scan_ntfs_deleted_files,
             search_lost_filesystems,
             cancel_lost_filesystem_search
         ])

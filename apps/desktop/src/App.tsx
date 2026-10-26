@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
-import { cancelLostFilesystemSearch, listPhysicalSources, scanImage, searchLostFilesystems, useDiskImageSelection, type ImageScan, type LostImageScan, type LostScanProgress, type PhysicalSource } from './hooks/useDiskImageSelection';
+import { cancelLostFilesystemSearch, listPhysicalSources, scanImage, scanNtfsDeletedFiles, searchLostFilesystems, useDiskImageSelection, type DeletedFileEntry, type ImageScan, type LostImageScan, type LostScanProgress, type PhysicalSource, type PartitionFinding } from './hooks/useDiskImageSelection';
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 bytes';
@@ -28,6 +28,10 @@ function App() {
   const [lostScanProgress, setLostScanProgress] = useState<LostScanProgress | null>(null);
   const [lostScanMessage, setLostScanMessage] = useState('');
   const [lostScanLoading, setLostScanLoading] = useState(false);
+  const [deletedFileScan, setDeletedFileScan] = useState<{ path: string; partitionOffsetBytes: number; entries: DeletedFileEntry[] } | null>(null);
+  const [deletedFileScanMessage, setDeletedFileScanMessage] = useState('');
+  const [deletedFileScanLoading, setDeletedFileScanLoading] = useState(false);
+  const [fileCategory, setFileCategory] = useState<'photos' | 'videos' | 'all'>('all');
 
   async function refreshPhysicalSources() {
     setSourceMessage('');
@@ -94,6 +98,21 @@ function App() {
     }
   }
 
+  async function scanDeletedEntries(partition: PartitionFinding) {
+    if (!selectedImage || partition.filesystem?.kind !== 'NTFS') return;
+    setDeletedFileScanMessage('');
+    setDeletedFileScanLoading(true);
+    try {
+      const entries = await scanNtfsDeletedFiles(selectedImage.path, partition.offsetBytes, partition.lengthBytes);
+      setDeletedFileScan({ path: selectedImage.path, partitionOffsetBytes: partition.offsetBytes, entries });
+    } catch (error) {
+      setDeletedFileScan(null);
+      setDeletedFileScanMessage(error instanceof Error ? error.message : 'Could not read deleted NTFS entries.');
+    } finally {
+      setDeletedFileScanLoading(false);
+    }
+  }
+
   const visibleImageScan =
     imageScan && selectedImage && imageScan.path === selectedImage.path
       ? imageScan.result
@@ -102,6 +121,18 @@ function App() {
     lostImageScan && selectedImage && lostImageScan.path === selectedImage.path
       ? lostImageScan.result
       : null;
+  const visibleDeletedFileScan = deletedFileScan && selectedImage && deletedFileScan.path === selectedImage.path
+    ? deletedFileScan
+    : null;
+  const filteredDeletedEntries = visibleDeletedFileScan?.entries.filter((entry) => {
+    if (!entry.name || entry.isDirectory) return false;
+    const extension = entry.name.split('.').at(-1)?.toLowerCase() ?? '';
+    const photoExtensions = ['jpg', 'jpeg', 'png', 'gif', 'bmp', 'tif', 'tiff', 'heic', 'webp'];
+    const videoExtensions = ['mp4', 'mov', 'avi', 'mkv', 'mts', 'm4v', '3gp', 'wmv'];
+    if (fileCategory === 'photos') return photoExtensions.includes(extension);
+    if (fileCategory === 'videos') return videoExtensions.includes(extension);
+    return true;
+  }) ?? [];
   const lostScanPercent = lostScanProgress && lostScanProgress.totalBytes > 0
     ? Math.min(100, Math.floor(lostScanProgress.scannedBytes / lostScanProgress.totalBytes * 100))
     : 0;
@@ -143,8 +174,8 @@ function App() {
               <div className="eyebrow"><span className="eyebrow-line" /> A CAREFUL WAY BACK</div>
               <h1>Choose the external drive first.<br /><em>Keep it untouched.</em></h1>
               <p className="hero-description">
-                Select an external source, then work from a disk image. This preview can inspect an
-                existing image; physical imaging and file recovery are still in development.
+                Select an external source, then work from a disk image. Inspect NTFS metadata for
+                deleted names while keeping the source drive untouched.
               </p>
             </div>
             <div className="hero-index" aria-hidden="true">
@@ -282,6 +313,16 @@ function App() {
                       <span className={partition.filesystem ? 'scan-confidence' : 'scan-confidence unknown'}>
                         {partition.filesystem ? `${partition.filesystem.confidence} confidence` : 'Needs review'}
                       </span>
+                      {partition.filesystem?.kind === 'NTFS' && (
+                        <button
+                          className="source-select-button"
+                          type="button"
+                          disabled={deletedFileScanLoading}
+                          onClick={() => void scanDeletedEntries(partition)}
+                        >
+                          {deletedFileScanLoading ? 'Reading…' : 'List deleted files'}
+                        </button>
+                      )}
                     </article>
                   ))}
                   {(visibleImageScan.mbrError || visibleImageScan.gptError) && (
@@ -316,6 +357,11 @@ function App() {
                             {candidate.filesystem?.reasons.map((reason) => <small key={reason}>✓ {reason}</small>)}
                           </div>
                           <span className="scan-confidence">{candidate.filesystem?.confidence ?? 'unknown'} confidence</span>
+                          {candidate.filesystem?.kind === 'NTFS' && (
+                            <button className="source-select-button" type="button" disabled={deletedFileScanLoading} onClick={() => void scanDeletedEntries(candidate)}>
+                              {deletedFileScanLoading ? 'Reading…' : 'List deleted files'}
+                            </button>
+                          )}
                         </article>
                       ))}
                       <p className="scan-limitation">Search checks 512-byte boundaries and supports NTFS and ext4 signatures. A candidate is not proof that files can be recovered.</p>
@@ -363,43 +409,59 @@ function App() {
                 <div className="panel-kicker">FILE RECOVERY / 03</div>
                 <h2 id="recovery-browser-heading">Photos and videos</h2>
               </div>
-              <span className="feature-status">FILE LISTING IN DEVELOPMENT</span>
+              <span className="feature-status">NTFS METADATA LISTING · EXPORT IN DEVELOPMENT</span>
             </header>
             <div className="recovery-browser-body">
               <aside className="recovery-filters" aria-label="File result filters">
                 <div className="filter-mode" aria-label="Browse mode">
                   <span>Type</span><span>Path</span>
                 </div>
-                <div className="file-category file-category-active"><span aria-hidden="true">▧</span><strong>Photos</strong><small>Coming next</small></div>
-                <div className="file-category"><span aria-hidden="true">▷</span><strong>Videos</strong><small>Coming next</small></div>
-                <div className="file-category"><span aria-hidden="true">▤</span><strong>Documents</strong><small>Planned</small></div>
-                <div className="file-category"><span aria-hidden="true">⌘</span><strong>Other files</strong><small>Planned</small></div>
+                <button className={`file-category${fileCategory === 'photos' ? ' file-category-active' : ''}`} onClick={() => setFileCategory('photos')} type="button"><span aria-hidden="true">▧</span><strong>Photos</strong><small>{visibleDeletedFileScan?.entries.filter((entry) => entry.name && /\.(jpe?g|png|gif|bmp|tiff?|heic|webp)$/i.test(entry.name)).length ?? '—'}</small></button>
+                <button className={`file-category${fileCategory === 'videos' ? ' file-category-active' : ''}`} onClick={() => setFileCategory('videos')} type="button"><span aria-hidden="true">▷</span><strong>Videos</strong><small>{visibleDeletedFileScan?.entries.filter((entry) => entry.name && /\.(mp4|mov|avi|mkv|mts|m4v|3gp|wmv)$/i.test(entry.name)).length ?? '—'}</small></button>
+                <button className={`file-category${fileCategory === 'all' ? ' file-category-active' : ''}`} onClick={() => setFileCategory('all')} type="button"><span aria-hidden="true">▤</span><strong>All files</strong><small>{visibleDeletedFileScan?.entries.length ?? '—'}</small></button>
               </aside>
               <div className="recovery-results-pane">
                 <div className="results-toolbar">
                   <div>
                     <strong>Recovered file list</strong>
-                    <span>{visibleLostImageScan
-                      ? `${visibleLostImageScan.candidates.length} volume candidates · file results unavailable`
-                      : visibleImageScan
-                        ? `${visibleImageScan.partitions.length} partitions checked · file results unavailable`
-                        : 'No image scan yet'}</span>
+                  <span>{visibleDeletedFileScan
+                      ? `Volume at ${formatBytes(visibleDeletedFileScan.partitionOffsetBytes)} · ${filteredDeletedEntries.length} entries · metadata only`
+                      : visibleLostImageScan
+                        ? `${visibleLostImageScan.candidates.length} volume candidates · select an NTFS partition to list files`
+                        : visibleImageScan
+                          ? `${visibleImageScan.partitions.length} partitions checked · select an NTFS partition to list files`
+                          : 'No image scan yet'}</span>
                   </div>
                   <button className="filter-button" type="button" disabled>Filter <span aria-hidden="true">⌄</span></button>
                 </div>
-                <div className="results-search">
+                {deletedFileScanMessage && <p className="input-message" role="alert">{deletedFileScanMessage}</p>}
+                {visibleDeletedFileScan ? (
+                  <div className="deleted-file-list" aria-live="polite">
+                    {filteredDeletedEntries.length === 0 ? (
+                      <p className="scan-empty">No deleted file names in this category were found in the scanned MFT records.</p>
+                    ) : filteredDeletedEntries.map((entry) => (
+                      <article className="deleted-file-row" key={`${entry.recordNumber}-${entry.sequenceNumber}`}>
+                        <span className="deleted-file-icon" aria-hidden="true">{entry.name?.match(/\.(mp4|mov|avi|mkv|mts|m4v|3gp|wmv)$/i) ? '▷' : '▧'}</span>
+                        <span className="deleted-file-name"><strong>{entry.name}</strong><small>NTFS record {entry.recordNumber} · parent record {entry.parentRecordNumber ?? 'unknown'}</small></span>
+                        <span className="deleted-file-size">{entry.dataSizeBytes === null ? 'Size unavailable' : formatBytes(entry.dataSizeBytes)}</span>
+                        <span className="deleted-file-state">Deleted · content not read</span>
+                      </article>
+                    ))}
+                    <p className="scan-limitation">Names and sizes come from surviving NTFS metadata. File contents and original folder paths are not available yet.</p>
+                  </div>
+                ) : <div className="results-search">
                   <span aria-hidden="true">⌕</span>
                   <input aria-label="Search recovered files" placeholder="Search recovered files" disabled />
-                </div>
-                <div className="file-results-empty" aria-live="polite">
+                </div>}
+                {!visibleDeletedFileScan && <div className="file-results-empty" aria-live="polite">
                   <div className="empty-art" aria-hidden="true">
                     <span className="empty-art-back" />
                     <span className="empty-art-front"><i /><i /><i /></span>
                     <span className="empty-art-lens" />
                   </div>
-                  <h3>{selectedImage ? 'File recovery is the next milestone' : 'Start with a disk image'}</h3>
+                  <h3>{selectedImage ? 'Select an NTFS volume to list deleted names' : 'Start with a disk image'}</h3>
                   <p>{selectedImage
-                    ? 'This preview can inspect partition and volume metadata. It does not yet list or recover photo and video files.'
+                    ? 'Run a partition scan or find lost volumes, then choose “List deleted files” on an NTFS result. File contents and export are still in development.'
                     : 'Select an external source above, then open an existing disk image. Physical imaging is not available in this preview.'}</p>
                   {visibleLostImageScan && (
                     <div className="volume-summary">
@@ -415,7 +477,7 @@ function App() {
                       <button className="text-button" onClick={cancelLostSearch} type="button">Cancel search</button>
                     </div>
                   )}
-                </div>
+                </div>}
                 <footer className="recovery-action-bar">
                   <div><span className="destination-mark" aria-hidden="true">↗</span><span><strong>Recovery destination</strong><small>Choose a separate drive when file export is ready.</small></span></div>
                   <button type="button" disabled>Recover selected</button>
@@ -426,7 +488,7 @@ function App() {
 
           <section className="build-note" aria-label="Preview build status">
             <span className="build-note-mark" aria-hidden="true">i</span>
-            <p><strong>Preview build.</strong> External-drive selection and image inspection are available. Physical imaging and file recovery are still in development.</p>
+            <p><strong>Preview build.</strong> Image inspection and NTFS deleted-name listing are available. Physical imaging and file-content export are still in development.</p>
             <span className="build-note-id">MILESTONE 05 / IMAGE SCAN</span>
           </section>
         </div>
