@@ -162,6 +162,54 @@ impl ReadAt for ImageReader {
     }
 }
 
+/// Stable platform identity captured during disk selection and rechecked by an
+/// authorized imaging helper immediately before source access.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceIdentity {
+    pub id: String,
+    pub model: String,
+    pub serial: String,
+    pub capacity_bytes: u64,
+}
+
+/// Rejects an unsafe or changed source before an imaging helper opens it.
+/// `destination_device_id` must be a platform-resolved physical device ID, not
+/// merely the selected file path or volume name.
+pub fn validate_imaging_safety(
+    selected: &DeviceIdentity,
+    refreshed: &DeviceIdentity,
+    source_is_system: bool,
+    source_is_mounted: bool,
+    destination_device_id: &str,
+) -> Result<(), &'static str> {
+    if !identity_is_complete(selected) || !identity_is_complete(refreshed) {
+        return Err("Source identity is incomplete");
+    }
+    if selected != refreshed {
+        return Err("Source identity changed; select the disk again");
+    }
+    if source_is_system {
+        return Err("Source is a system disk");
+    }
+    if source_is_mounted {
+        return Err("Source is mounted");
+    }
+    if destination_device_id.trim().is_empty() {
+        return Err("Image destination device could not be identified");
+    }
+    if destination_device_id == refreshed.id {
+        return Err("Image destination is on the source device");
+    }
+    Ok(())
+}
+
+fn identity_is_complete(identity: &DeviceIdentity) -> bool {
+    !identity.id.trim().is_empty()
+        && !identity.model.trim().is_empty()
+        && !identity.serial.trim().is_empty()
+        && identity.capacity_bytes > 0
+}
+
 /// A bounded reader for a physical device opened with read access only.
 ///
 /// The caller must verify the device identity and capacity from trusted
@@ -260,7 +308,8 @@ impl ReadAt for ReadOnlyDeviceReader {
 #[cfg(test)]
 mod tests {
     use super::{
-        ImageReader, ReadAt, ReadOnlyDeviceReader, copy_to_image, copy_to_image_with_space,
+        DeviceIdentity, ImageReader, ReadAt, ReadOnlyDeviceReader, copy_to_image,
+        copy_to_image_with_space, validate_imaging_safety,
     };
     use std::fs;
     use std::io;
@@ -335,6 +384,37 @@ mod tests {
 
         let error = reader.read_exact_at(4, &mut [0; 1]).unwrap_err();
         assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
+    }
+
+    #[test]
+    fn imaging_safety_requires_matching_identity_and_a_separate_unmounted_source() {
+        let selected = DeviceIdentity {
+            id: "/dev/disk4".to_owned(),
+            model: "External HDD".to_owned(),
+            serial: "SERIAL-4".to_owned(),
+            capacity_bytes: 1_000,
+        };
+
+        assert!(validate_imaging_safety(&selected, &selected, false, false, "disk5",).is_ok());
+
+        let mut changed = selected.clone();
+        changed.serial = "REPLACED".to_owned();
+        assert_eq!(
+            validate_imaging_safety(&selected, &changed, false, false, "disk5").unwrap_err(),
+            "Source identity changed; select the disk again"
+        );
+        assert_eq!(
+            validate_imaging_safety(&selected, &selected, false, true, "disk5").unwrap_err(),
+            "Source is mounted"
+        );
+        assert_eq!(
+            validate_imaging_safety(&selected, &selected, true, false, "disk5").unwrap_err(),
+            "Source is a system disk"
+        );
+        assert_eq!(
+            validate_imaging_safety(&selected, &selected, false, false, "/dev/disk4").unwrap_err(),
+            "Image destination is on the source device"
+        );
     }
 
     #[test]

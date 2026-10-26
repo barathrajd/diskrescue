@@ -116,6 +116,8 @@ and safe export.
    destination before imaging. Reopen the completed image in the inspection
    flow.
    - [x] Add a bounded reader that opens physical devices with read access only.
+   - [x] Add a fail-closed guard for identity revalidation, mounted/system
+     sources, and source/destination device separation.
    - [ ] Add platform-specific helper authorization and source revalidation.
    - [ ] Confirm the destination is on a different physical device and reopen
      the completed image in the inspection flow.
