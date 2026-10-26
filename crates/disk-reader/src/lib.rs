@@ -162,9 +162,106 @@ impl ReadAt for ImageReader {
     }
 }
 
+/// A bounded reader for a physical device opened with read access only.
+///
+/// The caller must verify the device identity and capacity from trusted
+/// platform metadata before opening this reader. On Unix, only character or
+/// block devices are accepted. On Windows, only `PhysicalDrive<number>` paths
+/// are accepted.
+#[derive(Debug)]
+pub struct ReadOnlyDeviceReader {
+    file: Mutex<File>,
+    length: u64,
+}
+
+impl ReadOnlyDeviceReader {
+    pub fn open(path: impl AsRef<Path>, verified_capacity_bytes: u64) -> io::Result<Self> {
+        #[cfg(not(any(unix, windows)))]
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            "physical device reading is not supported on this platform",
+        ));
+
+        let path = path.as_ref();
+        if verified_capacity_bytes == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "physical device capacity must be verified and nonzero",
+            ));
+        }
+
+        #[cfg(windows)]
+        if !is_windows_physical_drive_path(path) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "physical device path must identify a numbered PhysicalDrive",
+            ));
+        }
+
+        let file = OpenOptions::new().read(true).open(path)?;
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::FileTypeExt;
+            let file_type = file.metadata()?.file_type();
+            if !file_type.is_block_device() && !file_type.is_char_device() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "physical device reader requires a character or block device",
+                ));
+            }
+        }
+
+        Ok(Self {
+            file: Mutex::new(file),
+            length: verified_capacity_bytes,
+        })
+    }
+}
+
+#[cfg(windows)]
+fn is_windows_physical_drive_path(path: &Path) -> bool {
+    path.to_str()
+        .and_then(|path| path.strip_prefix(r"\\.\PhysicalDrive"))
+        .is_some_and(|number| !number.is_empty() && number.chars().all(|ch| ch.is_ascii_digit()))
+}
+
+impl ReadAt for ReadOnlyDeviceReader {
+    fn len(&self) -> u64 {
+        self.length
+    }
+
+    fn read_exact_at(&self, offset: u64, buffer: &mut [u8]) -> io::Result<()> {
+        let length = u64::try_from(buffer.len()).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "read length does not fit in u64",
+            )
+        })?;
+        let end = offset
+            .checked_add(length)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "read range overflows"))?;
+        if end > self.length {
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "read extends beyond the verified device capacity",
+            ));
+        }
+
+        let mut file = self
+            .file
+            .lock()
+            .map_err(|_| io::Error::other("physical device lock was poisoned"))?;
+        file.seek(SeekFrom::Start(offset))?;
+        file.read_exact(buffer)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{ImageReader, ReadAt, copy_to_image, copy_to_image_with_space};
+    use super::{
+        ImageReader, ReadAt, ReadOnlyDeviceReader, copy_to_image, copy_to_image_with_space,
+    };
     use std::fs;
     use std::io;
     use std::path::PathBuf;
@@ -211,6 +308,33 @@ mod tests {
         image.read_exact_at(0, &mut first_byte).unwrap();
         assert_eq!(first_byte, [0x5a]);
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn physical_device_reader_rejects_regular_files() {
+        let directory = temporary_directory();
+        let path = directory.join("ordinary-file.img");
+        fs::write(&path, [0x33; 512]).unwrap();
+
+        let error = ReadOnlyDeviceReader::open(&path, 512).unwrap_err();
+
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn physical_device_reader_enforces_the_verified_capacity_boundary() {
+        let reader = ReadOnlyDeviceReader::open("/dev/zero", 4).unwrap();
+        let mut bytes = [1; 4];
+
+        reader.read_exact_at(0, &mut bytes).unwrap();
+        assert_eq!(bytes, [0; 4]);
+        assert_eq!(reader.len(), 4);
+
+        let error = reader.read_exact_at(4, &mut [0; 1]).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
     }
 
     #[test]

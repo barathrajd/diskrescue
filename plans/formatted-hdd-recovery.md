@@ -115,6 +115,10 @@ and safe export.
    confirm model, serial, and capacity, then revalidate the source and separate
    destination before imaging. Reopen the completed image in the inspection
    flow.
+   - [x] Add a bounded reader that opens physical devices with read access only.
+   - [ ] Add platform-specific helper authorization and source revalidation.
+   - [ ] Confirm the destination is on a different physical device and reopen
+     the completed image in the inspection flow.
 5. **Find the former volume.** Scan the image for partition and filesystem
    candidates, including supported backup metadata and damaged structures.
    Show offsets, confidence reasons, and unsupported areas before recovery.
