@@ -27,12 +27,24 @@ function App() {
   const [fileCategory, setFileCategory] = useState<'photos' | 'videos' | 'all'>('all');
   const selectedSource = physicalSources?.find((source) => source.id === selectedSourceId) ?? null;
   const selectedPartition = selectedSource?.partitions.find((partition) => partition.id === selectedPartitionId) ?? null;
-  const partitionScanReady = Boolean(selectedSource && selectedPartition
-    && selectedSource.externalStateKnown && selectedSource.isExternal
-    && selectedSource.systemStateKnown && !selectedSource.isSystem
-    && selectedSource.mountStateKnown && selectedSource.mountPoints.length === 0
-    && selectedPartition.mountPoints.length === 0
-    && selectedPartition.offsetBytes !== null && selectedPartition.sizeBytes > 0);
+  const partitionScanBlocker = !selectedSource || !selectedPartition
+    ? 'Select an external drive and one of its partitions first.'
+    : !selectedSource.externalStateKnown || !selectedSource.isExternal
+      ? 'DiskRescue could not confirm this is an external drive.'
+      : !selectedSource.systemStateKnown || selectedSource.isSystem
+        ? 'System-drive status is unknown or this is a system drive. Scanning is locked.'
+        : !selectedSource.mountStateKnown
+          ? 'DiskRescue could not confirm the drive mount state. Refresh drives and try again.'
+          : selectedSource.mountPoints.length > 0
+            ? 'Unmount every volume on this external drive, then refresh drives.'
+            : selectedPartition.mountPoints.length > 0
+              ? 'Unmount this partition, then refresh drives.'
+              : selectedPartition.offsetBytes === null
+                ? 'The partition start offset is unavailable. Refresh drives before scanning.'
+                : selectedPartition.sizeBytes <= 0
+                  ? 'The partition size is unavailable. Refresh drives before scanning.'
+                  : null;
+  const partitionScanReady = partitionScanBlocker === null;
 
   function openSource(sourceId: string) {
     setSelectedSourceId(sourceId);
@@ -267,8 +279,8 @@ function App() {
                   {deletedFileScanLoading ? 'Scanning partition…' : 'Scan partition'} <span aria-hidden="true">⌕</span>
                 </button>
               </div>
-              {selectedSource && selectedPartition && !partitionScanReady && (
-                <p className="partition-safety-note" role="status">To scan, DiskRescue must confirm this is an external non-system drive and the selected partition is unmounted.</p>
+              {partitionScanBlocker && activePage === 'recovery' && (
+                <p className="partition-safety-note" role="status">{partitionScanBlocker}</p>
               )}
               {deletedFileScanMessage && <p className="input-message" role="alert">{deletedFileScanMessage}</p>}
               {visibleDeletedFileScan && (

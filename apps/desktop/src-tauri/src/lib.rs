@@ -476,9 +476,7 @@ fn list_macos_sources() -> Result<Vec<PhysicalSource>, String> {
                                 .or_else(|| dictionary.get("Size"))
                                 .and_then(plist::Value::as_unsigned_integer)
                                 .unwrap_or(0),
-                            offset_bytes: dictionary
-                                .get("PartitionOffset")
-                                .and_then(plist::Value::as_unsigned_integer),
+                            offset_bytes: macos_partition_offset(dictionary),
                             kind: plist_string(dictionary, "FilesystemType")
                                 .or_else(|| plist_string(dictionary, "Content")),
                             mount_points: partition_mount.into_iter().collect(),
@@ -566,6 +564,13 @@ fn plist_string(dictionary: &plist::Dictionary, key: &str) -> Option<String> {
         .map(str::trim)
         .filter(|text| !text.is_empty())
         .map(str::to_owned)
+}
+
+fn macos_partition_offset(dictionary: &plist::Dictionary) -> Option<u64> {
+    dictionary
+        .get("PartitionMapPartitionOffset")
+        .or_else(|| dictionary.get("PartitionOffset"))
+        .and_then(plist::Value::as_unsigned_integer)
 }
 
 #[cfg(target_os = "macos")]
@@ -932,12 +937,23 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        PhysicalSource, inspect_image, parse_linux_sources, parse_windows_sources,
-        source_imaging_blocker,
+        PhysicalSource, inspect_image, macos_partition_offset, parse_linux_sources,
+        parse_windows_sources, source_imaging_blocker,
     };
     use std::fs;
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn reads_macos_partition_map_offset_from_diskutil_metadata() {
+        let mut dictionary = plist::Dictionary::new();
+        dictionary.insert(
+            "PartitionMapPartitionOffset".into(),
+            plist::Value::Integer(629_146_648_576_i64.into()),
+        );
+
+        assert_eq!(macos_partition_offset(&dictionary), Some(629_146_648_576));
+    }
 
     #[test]
     fn inspecting_selected_image_returns_partition_summary() {
