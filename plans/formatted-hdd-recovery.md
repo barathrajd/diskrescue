@@ -16,9 +16,11 @@ checks pass.
 
 - The same recovery workflow works from an existing image on Windows, macOS,
   and Linux.
-- On each supported OS, image creation identifies the source by stable device
-  details, opens it read-only, writes only to a separate destination, and stops
-  safely on read errors or insufficient destination space.
+- On platforms with a verified imaging helper, image creation confirms stable
+  source details, opens the source read-only, writes to a separate destination,
+  and stops safely on read errors or insufficient destination space. Where no
+  helper is safely supported, direct imaging is disabled and existing-image
+  recovery remains available.
 - The scanner reports partition and filesystem candidates with offsets,
   confidence reasons, and unsupported or unreadable areas.
 - Metadata-based recovery retains names and paths when supported metadata
@@ -84,13 +86,17 @@ no recovery prediction until it inspects an image. See [Microsoft's format
 reference](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/format).
 
 Tauri documents Windows, macOS, and Linux development prerequisites, but
-physical-device enumeration, read-only access, and permissions remain
-platform-specific. Validate those in a small acquisition spike before settling
-the per-platform implementation. If direct imaging cannot be made safe on a
-platform, retain existing-image recovery there and guide the user to a
-platform-supported imaging tool. [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
-describe its OS-specific build requirements; the [GNU ddrescue
-manual](https://www.gnu.org/software/ddrescue/manual/ddrescue_manual.html)
+physical-device enumeration and access require platform-specific privilege
+handling. Keep the app unprivileged and isolate imaging in narrow helpers.
+Microsoft recommends a separate helper for elevated Windows operations;
+macOS's current `SMAppService` path starts at macOS 13, and Linux authorization
+depends on polkit and the desktop session. If a safe helper is unavailable, keep
+existing-image recovery and guide the user to a platform-supported imaging
+tool. See [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/),
+[Windows privilege guidance](https://learn.microsoft.com/en-us/windows/win32/secbp/running-with-administrator-privileges),
+[Apple Service Management](https://developer.apple.com/documentation/servicemanagement/smappservice),
+and [polkit](https://www.freedesktop.org/software/polkit/docs/latest/polkit.8).
+The [GNU ddrescue manual](https://www.gnu.org/software/ddrescue/manual/ddrescue_manual.html)
 documents mapfile-based imaging for difficult reads.
 
 ## Milestones
@@ -100,22 +106,26 @@ and safe export.
 
 1. [x] **Open an existing image.** Select an image through a native file picker,
    inspect its MBR/GPT metadata in Rust, and show the image size and findings.
-2. [ ] **Create a safe image.** Choose a physical source and separate destination.
-   Confirm model, serial, and capacity before imaging; show progress and stop
-   safely. Verify the result by reopening it in the inspection flow.
-3. **Find the former volume.** Scan the image for partition and filesystem
+2. [x] **Write an image safely.** Copy a bounded read-only source in chunks to a
+   temporary file in the destination filesystem. Check free space first, report
+   progress, cancel without publishing a partial image, and refuse overwrite.
+3. [ ] **Image a physical HDD.** Use a platform-specific privileged helper to
+   list identity and mount state, confirm model, serial, and capacity, then
+   revalidate the source and separate destination before imaging. Reopen the
+   completed image in the inspection flow.
+4. **Find the former volume.** Scan the image for partition and filesystem
    candidates, including supported backup metadata and damaged structures.
    Show offsets, confidence reasons, and unsupported areas before recovery.
-4. **Recover metadata-backed files.** For the first supported filesystems,
+5. **Recover metadata-backed files.** For the first supported filesystems,
    list recoverable deleted entries with names and paths where metadata
    survives; let the user export selected files to a separate destination.
-5. **Carve common file formats.** Add bounded scanners and format validators
+6. **Carve common file formats.** Add bounded scanners and format validators
    for the agreed common document, photo, video, and archive catalog. Show
    generic names, file integrity status, and likely partial results.
-6. **Finish the desktop recovery session.** Add filtering, preview, progress,
+7. **Finish the desktop recovery session.** Add filtering, preview, progress,
    cancellation and resumable checkpoints; record source-image provenance and
    export results without overwriting files silently.
-7. **Verify supported platforms and safety.** Exercise image intake, scanning,
+8. **Verify supported platforms and safety.** Exercise image intake, scanning,
    cancellation, and export on Windows, macOS, and Linux with synthetic images;
    document platform gaps and ensure unsupported paths fail closed.
 
@@ -124,9 +134,12 @@ and safe export.
 Resolve these items during implementation or use the listed fallback.
 
 - **Physical imaging permissions and device identification differ by OS.**
-  Owner: implementation. Run a read-only acquisition spike on all three
-  platforms; fallback to existing-image input plus a documented external
-  imaging tool wherever the spike fails safety checks.
+  Owner: implementation. Keep the app unprivileged and run a read-only
+  acquisition spike for each helper. Windows needs UAC elevation, macOS helper
+  registration requires supported signing and macOS 13 or later for
+  `SMAppService`, and Linux needs an available polkit authentication agent.
+  Fallback to existing-image input plus documented external imaging wherever a
+  helper fails safety checks or cannot be authorized.
 - **The source filesystem and exact format operation are unknown.** Owner:
   recovery engine. Inspect partition and filesystem signatures in the image;
   initially support NTFS and ext4 metadata paths from the existing
