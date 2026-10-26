@@ -442,6 +442,37 @@ struct ImageReview {
     gpt_partition_count: usize,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ScanReview {
+    image_bytes: u64,
+    mbr_error: Option<String>,
+    gpt_error: Option<String>,
+    partitions: Vec<PartitionReview>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PartitionReview {
+    table: String,
+    index: u32,
+    type_label: String,
+    offset_bytes: u64,
+    length_bytes: u64,
+    filesystem: Option<FilesystemReview>,
+    issue: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FilesystemReview {
+    kind: String,
+    offset_bytes: u64,
+    length_bytes: u64,
+    confidence: String,
+    reasons: Vec<String>,
+}
+
 #[tauri::command]
 fn inspect_image(path: String) -> Result<ImageReview, String> {
     let inspection = recovery_core::inspect_image(path).map_err(|error| error.to_string())?;
@@ -466,12 +497,46 @@ fn inspect_image(path: String) -> Result<ImageReview, String> {
     })
 }
 
+#[tauri::command]
+fn scan_image(path: String) -> Result<ScanReview, String> {
+    let scan = recovery_core::scan_image(path).map_err(|error| error.to_string())?;
+    let partitions = scan
+        .partition_candidates
+        .into_iter()
+        .map(|partition| PartitionReview {
+            table: partition.table.to_owned(),
+            index: partition.index,
+            type_label: partition.type_label,
+            offset_bytes: partition.offset_bytes,
+            length_bytes: partition.length_bytes,
+            filesystem: partition.filesystem.map(|filesystem| FilesystemReview {
+                kind: match filesystem.kind {
+                    partition_hunter::FileSystemKind::Ntfs => "NTFS".to_owned(),
+                    partition_hunter::FileSystemKind::Ext4 => "ext4".to_owned(),
+                },
+                offset_bytes: filesystem.offset_bytes,
+                length_bytes: filesystem.length_bytes,
+                confidence: filesystem.confidence.to_owned(),
+                reasons: filesystem.reasons.into_iter().map(str::to_owned).collect(),
+            }),
+            issue: partition.issue,
+        })
+        .collect();
+    Ok(ScanReview {
+        image_bytes: scan.image_bytes,
+        mbr_error: scan.mbr_error,
+        gpt_error: scan.gpt_error,
+        partitions,
+    })
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             inspect_image,
-            list_physical_sources
+            list_physical_sources,
+            scan_image
         ])
         .run(tauri::generate_context!())
         .expect("failed to run DiskRescue");

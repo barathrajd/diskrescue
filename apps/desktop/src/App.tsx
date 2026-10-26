@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { listPhysicalSources, useDiskImageSelection, type PhysicalSource } from './hooks/useDiskImageSelection';
+import { listPhysicalSources, scanImage, useDiskImageSelection, type ImageScan, type PhysicalSource } from './hooks/useDiskImageSelection';
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 bytes';
@@ -19,6 +19,9 @@ function App() {
   const [physicalSources, setPhysicalSources] = useState<PhysicalSource[] | null>(null);
   const [sourceMessage, setSourceMessage] = useState('');
   const [sourcesLoading, setSourcesLoading] = useState(false);
+  const [imageScan, setImageScan] = useState<{ path: string; result: ImageScan } | null>(null);
+  const [scanMessage, setScanMessage] = useState('');
+  const [scanLoading, setScanLoading] = useState(false);
 
   async function refreshPhysicalSources() {
     setSourceMessage('');
@@ -31,6 +34,25 @@ function App() {
       setSourcesLoading(false);
     }
   }
+
+  async function scanSelectedImage() {
+    if (!selectedImage) return;
+    setScanMessage('');
+    setScanLoading(true);
+    try {
+      setImageScan({ path: selectedImage.path, result: await scanImage(selectedImage.path) });
+    } catch (error) {
+      setImageScan(null);
+      setScanMessage(error instanceof Error ? error.message : 'Could not scan this image.');
+    } finally {
+      setScanLoading(false);
+    }
+  }
+
+  const visibleImageScan =
+    imageScan && selectedImage && imageScan.path === selectedImage.path
+      ? imageScan.result
+      : null;
 
   return (
     <main className="app-shell">
@@ -130,6 +152,44 @@ function App() {
                 </div>
               )}
 
+              {imageReview && (
+                <div className="scan-actions">
+                  <p>Check partition entries for supported NTFS and ext4 structures.</p>
+                  <button className="browse-button inventory-refresh" onClick={scanSelectedImage} disabled={scanLoading} type="button">
+                    {scanLoading ? 'Scanning…' : 'Scan partitions'} <span aria-hidden="true">⌕</span>
+                  </button>
+                </div>
+              )}
+              {scanMessage && <p className="input-message" role="alert">{scanMessage}</p>}
+              {visibleImageScan && (
+                <div className="scan-results" aria-live="polite">
+                  <div className="scan-results-heading">
+                    <strong>Partition scan</strong>
+                    <span>{visibleImageScan.partitions.length} entries · read-only</span>
+                  </div>
+                  {visibleImageScan.partitions.length === 0 ? (
+                    <p className="scan-empty">No valid partition entries were found in the primary tables.</p>
+                  ) : visibleImageScan.partitions.map((partition) => (
+                    <article className="scan-result-row" key={`${partition.table}-${partition.index}`}>
+                      <div className="scan-result-main">
+                        <strong>{partition.filesystem?.kind ?? 'Unsupported or unknown filesystem'}</strong>
+                        <span>{partition.table} entry {partition.index} · {partition.typeLabel}</span>
+                        <small>Start {formatBytes(partition.offsetBytes)} · Length {formatBytes(partition.lengthBytes)}</small>
+                        {partition.filesystem?.reasons.map((reason) => <small key={reason}>✓ {reason}</small>)}
+                        {partition.issue && <small className="scan-issue">{partition.issue}</small>}
+                      </div>
+                      <span className={partition.filesystem ? 'scan-confidence' : 'scan-confidence unknown'}>
+                        {partition.filesystem ? `${partition.filesystem.confidence} confidence` : 'Needs review'}
+                      </span>
+                    </article>
+                  ))}
+                  {(visibleImageScan.mbrError || visibleImageScan.gptError) && (
+                    <p className="scan-warning">Primary table notes: {[visibleImageScan.mbrError, visibleImageScan.gptError].filter(Boolean).join(' · ')}</p>
+                  )}
+                  <p className="scan-limitation">This scan checks primary partition-table entries only. Lost partition tables and backup GPT scanning are not available yet.</p>
+                </div>
+              )}
+
               <div className="image-panel-footer">
                 <span><span className="tiny-check">✓</span> File stays on this device</span>
                 <span>NO UPLOADS</span>
@@ -199,8 +259,8 @@ function App() {
 
           <section className="build-note" aria-label="Preview build status">
             <span className="build-note-mark" aria-hidden="true">i</span>
-            <p><strong>Preview build.</strong> Image selection, basic MBR/GPT inspection and physical disk metadata listing are ready. Physical imaging and file recovery are still in development.</p>
-            <span className="build-note-id">MILESTONE 03 / SOURCE INVENTORY</span>
+            <p><strong>Preview build.</strong> Image selection, partition-boundary NTFS/ext4 checks and physical disk metadata listing are ready. Lost-partition search, physical imaging and file recovery are still in development.</p>
+            <span className="build-note-id">MILESTONE 05 / IMAGE SCAN</span>
           </section>
         </div>
 

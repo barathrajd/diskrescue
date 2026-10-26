@@ -122,6 +122,10 @@ and safe export.
 5. **Find the former volume.** Scan the image for partition and filesystem
    candidates, including supported backup metadata and damaged structures.
    Show offsets, confidence reasons, and unsupported areas before recovery.
+   - [x] Inspect MBR/GPT partition entries and check partition starts for
+     structurally consistent NTFS or ext4 signatures.
+   - [ ] Search backup GPT metadata and image regions for lost partition starts;
+     report unreadable and unsupported areas.
 6. **Recover metadata-backed files.** For the first supported filesystems,
    list recoverable deleted entries with names and paths where metadata
    survives; let the user export selected files to a separate destination.
@@ -146,6 +150,10 @@ Resolve these items during implementation or use the listed fallback.
   `SMAppService`, and Linux needs an available polkit authentication agent.
   Fallback to existing-image input plus documented external imaging wherever a
   helper fails safety checks or cannot be authorized.
+- **macOS helper signing credentials are not currently available.** Owner:
+  release. Keep direct physical imaging disabled on macOS until DiskRescue can
+  ship and validate a signed Launch Daemon; existing-image input remains
+  available.
 - **The source filesystem and exact format operation are unknown.** Owner:
   recovery engine. Inspect partition and filesystem signatures in the image;
   initially support NTFS and ext4 metadata paths from the existing

@@ -27,8 +27,37 @@ export type PhysicalSource = {
   eligibilityReason: string | null;
 };
 
+export type FilesystemFinding = {
+  kind: string;
+  offsetBytes: number;
+  lengthBytes: number;
+  confidence: string;
+  reasons: string[];
+};
+
+export type PartitionFinding = {
+  table: string;
+  index: number;
+  typeLabel: string;
+  offsetBytes: number;
+  lengthBytes: number;
+  filesystem: FilesystemFinding | null;
+  issue: string | null;
+};
+
+export type ImageScan = {
+  imageBytes: number;
+  mbrError: string | null;
+  gptError: string | null;
+  partitions: PartitionFinding[];
+};
+
 export async function listPhysicalSources() {
   return invoke<PhysicalSource[]>('list_physical_sources');
+}
+
+export async function scanImage(path: string) {
+  return invoke<ImageScan>('scan_image', { path });
 }
 
 export function useDiskImageSelection() {
