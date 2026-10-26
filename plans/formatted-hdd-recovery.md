@@ -152,6 +152,8 @@ and safe export.
    export results without overwriting files silently.
    - [x] Put external-drive selection before image input; hide internal and
      unknown drives and omit any source-mount action.
+   - [x] Add a photo/video results workspace with type/path navigation and a
+     truthful empty state until file-level recovery data is available.
 9. **Verify supported platforms and safety.** Exercise image intake, scanning,
    cancellation, and export on Windows, macOS, and Linux with synthetic images;
    document platform gaps and ensure unsupported paths fail closed.

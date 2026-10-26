@@ -299,13 +299,6 @@ function App() {
                       {lostScanLoading ? 'Searching…' : 'Find lost volumes'} <span aria-hidden="true">⌕</span>
                     </button>
                   </div>
-                  {lostScanLoading && lostScanProgress && (
-                    <div className="lost-scan-progress" aria-live="polite">
-                      <div><span>Scanning {formatBytes(lostScanProgress.scannedBytes)} of {formatBytes(lostScanProgress.totalBytes)}</span><span>{lostScanPercent}%</span></div>
-                      <progress max="100" value={lostScanPercent} aria-label="Lost volume search progress" />
-                      <button className="text-button" onClick={cancelLostSearch} type="button">Cancel search</button>
-                    </div>
-                  )}
                   {lostScanMessage && <p className="input-message" role="alert">{lostScanMessage}</p>}
                   {visibleLostImageScan && (
                     <div className="scan-results lost-scan-results" aria-live="polite">
@@ -363,6 +356,73 @@ function App() {
               </div>
             </aside>
           </div>
+
+          <section className="recovery-browser" aria-labelledby="recovery-browser-heading">
+            <header className="recovery-browser-heading">
+              <div>
+                <div className="panel-kicker">FILE RECOVERY / 03</div>
+                <h2 id="recovery-browser-heading">Photos and videos</h2>
+              </div>
+              <span className="feature-status">FILE LISTING IN DEVELOPMENT</span>
+            </header>
+            <div className="recovery-browser-body">
+              <aside className="recovery-filters" aria-label="File result filters">
+                <div className="filter-mode" aria-label="Browse mode">
+                  <span>Type</span><span>Path</span>
+                </div>
+                <div className="file-category file-category-active"><span aria-hidden="true">▧</span><strong>Photos</strong><small>Coming next</small></div>
+                <div className="file-category"><span aria-hidden="true">▷</span><strong>Videos</strong><small>Coming next</small></div>
+                <div className="file-category"><span aria-hidden="true">▤</span><strong>Documents</strong><small>Planned</small></div>
+                <div className="file-category"><span aria-hidden="true">⌘</span><strong>Other files</strong><small>Planned</small></div>
+              </aside>
+              <div className="recovery-results-pane">
+                <div className="results-toolbar">
+                  <div>
+                    <strong>Recovered file list</strong>
+                    <span>{visibleLostImageScan
+                      ? `${visibleLostImageScan.candidates.length} volume candidates · file results unavailable`
+                      : visibleImageScan
+                        ? `${visibleImageScan.partitions.length} partitions checked · file results unavailable`
+                        : 'No image scan yet'}</span>
+                  </div>
+                  <button className="filter-button" type="button" disabled>Filter <span aria-hidden="true">⌄</span></button>
+                </div>
+                <div className="results-search">
+                  <span aria-hidden="true">⌕</span>
+                  <input aria-label="Search recovered files" placeholder="Search recovered files" disabled />
+                </div>
+                <div className="file-results-empty" aria-live="polite">
+                  <div className="empty-art" aria-hidden="true">
+                    <span className="empty-art-back" />
+                    <span className="empty-art-front"><i /><i /><i /></span>
+                    <span className="empty-art-lens" />
+                  </div>
+                  <h3>{selectedImage ? 'File recovery is the next milestone' : 'Start with a disk image'}</h3>
+                  <p>{selectedImage
+                    ? 'This preview can inspect partition and volume metadata. It does not yet list or recover photo and video files.'
+                    : 'Select an external source above, then open an existing disk image. Physical imaging is not available in this preview.'}</p>
+                  {visibleLostImageScan && (
+                    <div className="volume-summary">
+                      <span className="summary-pulse" />
+                      <span>Volume search {visibleLostImageScan.complete ? 'finished' : 'stopped'} · {visibleLostImageScan.candidates.length} candidates</span>
+                    </div>
+                  )}
+                  {lostScanLoading && lostScanProgress && (
+                    <div className="browser-scan-progress" aria-live="polite">
+                      <div><span>Searching image regions</span><strong>{lostScanPercent}%</strong></div>
+                      <progress max="100" value={lostScanPercent} aria-label="Image volume search progress" />
+                      <small>{formatBytes(lostScanProgress.scannedBytes)} of {formatBytes(lostScanProgress.totalBytes)} checked</small>
+                      <button className="text-button" onClick={cancelLostSearch} type="button">Cancel search</button>
+                    </div>
+                  )}
+                </div>
+                <footer className="recovery-action-bar">
+                  <div><span className="destination-mark" aria-hidden="true">↗</span><span><strong>Recovery destination</strong><small>Choose a separate drive when file export is ready.</small></span></div>
+                  <button type="button" disabled>Recover selected</button>
+                </footer>
+              </div>
+            </div>
+          </section>
 
           <section className="build-note" aria-label="Preview build status">
             <span className="build-note-mark" aria-hidden="true">i</span>
