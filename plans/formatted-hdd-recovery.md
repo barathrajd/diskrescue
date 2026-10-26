@@ -135,8 +135,9 @@ and safe export.
    survives; let the user export selected files to a separate destination.
    - [x] Parse NTFS boot-sector geometry and validate the partition and MFT
      bounds.
-   - [ ] Validate MFT record update-sequence fixups and list deleted
-     `$FILE_NAME` metadata entries with parent references.
+   - [x] Validate MFT record update-sequence fixups and parse `$FILE_NAME`
+     metadata with parent references.
+   - [ ] Read the MFT and list deleted entries from parsed records.
    - [ ] Resolve surviving parent paths and recover supported data streams to
      a separate destination.
 7. **Carve common file formats.** Add bounded scanners and format validators
