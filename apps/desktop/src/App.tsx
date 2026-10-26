@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { listPhysicalSources, scanImage, useDiskImageSelection, type ImageScan, type PhysicalSource } from './hooks/useDiskImageSelection';
+import { listen } from '@tauri-apps/api/event';
+import { cancelLostFilesystemSearch, listPhysicalSources, scanImage, searchLostFilesystems, useDiskImageSelection, type ImageScan, type LostImageScan, type LostScanProgress, type PhysicalSource } from './hooks/useDiskImageSelection';
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 bytes';
@@ -22,6 +23,10 @@ function App() {
   const [imageScan, setImageScan] = useState<{ path: string; result: ImageScan } | null>(null);
   const [scanMessage, setScanMessage] = useState('');
   const [scanLoading, setScanLoading] = useState(false);
+  const [lostImageScan, setLostImageScan] = useState<{ path: string; result: LostImageScan } | null>(null);
+  const [lostScanProgress, setLostScanProgress] = useState<LostScanProgress | null>(null);
+  const [lostScanMessage, setLostScanMessage] = useState('');
+  const [lostScanLoading, setLostScanLoading] = useState(false);
 
   async function refreshPhysicalSources() {
     setSourceMessage('');
@@ -49,10 +54,46 @@ function App() {
     }
   }
 
+  async function findLostVolumes() {
+    if (!selectedImage) return;
+    setLostScanMessage('');
+    setLostImageScan(null);
+    setLostScanProgress(null);
+    setLostScanLoading(true);
+    let unlisten: (() => void) | undefined;
+    try {
+      unlisten = await listen<LostScanProgress>('lost-filesystem-progress', (event) => {
+        setLostScanProgress(event.payload);
+      });
+      const result = await searchLostFilesystems(selectedImage.path);
+      setLostImageScan({ path: selectedImage.path, result });
+    } catch (error) {
+      setLostScanMessage(error instanceof Error ? error.message : 'Could not search this image.');
+    } finally {
+      unlisten?.();
+      setLostScanLoading(false);
+    }
+  }
+
+  async function cancelLostSearch() {
+    try {
+      await cancelLostFilesystemSearch();
+    } catch (error) {
+      setLostScanMessage(error instanceof Error ? error.message : 'Could not cancel the search.');
+    }
+  }
+
   const visibleImageScan =
     imageScan && selectedImage && imageScan.path === selectedImage.path
       ? imageScan.result
       : null;
+  const visibleLostImageScan =
+    lostImageScan && selectedImage && lostImageScan.path === selectedImage.path
+      ? lostImageScan.result
+      : null;
+  const lostScanPercent = lostScanProgress && lostScanProgress.totalBytes > 0
+    ? Math.min(100, Math.floor(lostScanProgress.scannedBytes / lostScanProgress.totalBytes * 100))
+    : 0;
 
   return (
     <main className="app-shell">
@@ -187,6 +228,46 @@ function App() {
                     <p className="scan-warning">Primary table notes: {[visibleImageScan.mbrError, visibleImageScan.gptError].filter(Boolean).join(' · ')}</p>
                   )}
                   <p className="scan-limitation">This scan checks primary partition-table entries only. Lost partition tables and backup GPT scanning are not available yet.</p>
+                </div>
+              )}
+
+              {imageReview && (
+                <div className="lost-scan-panel">
+                  <div className="scan-actions">
+                    <p>Search the rest of this image for lost NTFS and ext4 volume starts.</p>
+                    <button className="browse-button inventory-refresh" onClick={findLostVolumes} disabled={lostScanLoading} type="button">
+                      {lostScanLoading ? 'Searching…' : 'Find lost volumes'} <span aria-hidden="true">⌕</span>
+                    </button>
+                  </div>
+                  {lostScanLoading && lostScanProgress && (
+                    <div className="lost-scan-progress" aria-live="polite">
+                      <div><span>Scanning {formatBytes(lostScanProgress.scannedBytes)} of {formatBytes(lostScanProgress.totalBytes)}</span><span>{lostScanPercent}%</span></div>
+                      <progress max="100" value={lostScanPercent} aria-label="Lost volume search progress" />
+                      <button className="text-button" onClick={cancelLostSearch} type="button">Cancel search</button>
+                    </div>
+                  )}
+                  {lostScanMessage && <p className="input-message" role="alert">{lostScanMessage}</p>}
+                  {visibleLostImageScan && (
+                    <div className="scan-results lost-scan-results" aria-live="polite">
+                      <div className="scan-results-heading">
+                        <strong>Lost-volume search {visibleLostImageScan.complete ? 'complete' : 'stopped early'}</strong>
+                        <span>{visibleLostImageScan.candidates.length} candidates · {formatBytes(visibleLostImageScan.scannedBytes)} searched</span>
+                      </div>
+                      {visibleLostImageScan.candidates.length === 0 ? (
+                        <p className="scan-empty">No supported filesystem starts were found outside known partitions.</p>
+                      ) : visibleLostImageScan.candidates.map((candidate) => (
+                        <article className="scan-result-row" key={`${candidate.table}-${candidate.index}`}>
+                          <div className="scan-result-main">
+                            <strong>{candidate.filesystem?.kind ?? 'Unknown filesystem'}</strong>
+                            <span>Candidate at {formatBytes(candidate.offsetBytes)} · {candidate.table}</span>
+                            {candidate.filesystem?.reasons.map((reason) => <small key={reason}>✓ {reason}</small>)}
+                          </div>
+                          <span className="scan-confidence">{candidate.filesystem?.confidence ?? 'unknown'} confidence</span>
+                        </article>
+                      ))}
+                      <p className="scan-limitation">Search checks 512-byte boundaries and supports NTFS and ext4 signatures. A candidate is not proof that files can be recovered.</p>
+                    </div>
+                  )}
                 </div>
               )}
 

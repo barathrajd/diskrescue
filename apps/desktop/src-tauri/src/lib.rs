@@ -2,6 +2,10 @@
 
 use serde::Serialize;
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
+use tauri::Emitter;
+
+static LOST_SCAN_CANCELLED: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -473,6 +477,22 @@ struct FilesystemReview {
     reasons: Vec<String>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LostScanProgress {
+    scanned_bytes: u64,
+    total_bytes: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LostScanReview {
+    image_bytes: u64,
+    scanned_bytes: u64,
+    complete: bool,
+    candidates: Vec<PartitionReview>,
+}
+
 #[tauri::command]
 fn inspect_image(path: String) -> Result<ImageReview, String> {
     let inspection = recovery_core::inspect_image(path).map_err(|error| error.to_string())?;
@@ -511,24 +531,7 @@ fn scan_image(path: String) -> Result<ScanReview, String> {
     let partitions = scan
         .partition_candidates
         .into_iter()
-        .map(|partition| PartitionReview {
-            table: partition.table.to_owned(),
-            index: partition.index,
-            type_label: partition.type_label,
-            offset_bytes: partition.offset_bytes,
-            length_bytes: partition.length_bytes,
-            filesystem: partition.filesystem.map(|filesystem| FilesystemReview {
-                kind: match filesystem.kind {
-                    partition_hunter::FileSystemKind::Ntfs => "NTFS".to_owned(),
-                    partition_hunter::FileSystemKind::Ext4 => "ext4".to_owned(),
-                },
-                offset_bytes: filesystem.offset_bytes,
-                length_bytes: filesystem.length_bytes,
-                confidence: filesystem.confidence.to_owned(),
-                reasons: filesystem.reasons.into_iter().map(str::to_owned).collect(),
-            }),
-            issue: partition.issue,
-        })
+        .map(partition_review)
         .collect();
     Ok(ScanReview {
         image_bytes: scan.image_bytes,
@@ -538,13 +541,80 @@ fn scan_image(path: String) -> Result<ScanReview, String> {
     })
 }
 
+fn partition_review(partition: recovery_core::PartitionFinding) -> PartitionReview {
+    PartitionReview {
+        table: partition.table.to_owned(),
+        index: partition.index,
+        type_label: partition.type_label,
+        offset_bytes: partition.offset_bytes,
+        length_bytes: partition.length_bytes,
+        filesystem: partition.filesystem.map(|filesystem| FilesystemReview {
+            kind: match filesystem.kind {
+                partition_hunter::FileSystemKind::Ntfs => "NTFS".to_owned(),
+                partition_hunter::FileSystemKind::Ext4 => "ext4".to_owned(),
+            },
+            offset_bytes: filesystem.offset_bytes,
+            length_bytes: filesystem.length_bytes,
+            confidence: filesystem.confidence.to_owned(),
+            reasons: filesystem.reasons.into_iter().map(str::to_owned).collect(),
+        }),
+        issue: partition.issue,
+    }
+}
+
+#[tauri::command]
+fn search_lost_filesystems(app: tauri::AppHandle, path: String) -> Result<LostScanReview, String> {
+    LOST_SCAN_CANCELLED.store(false, Ordering::SeqCst);
+    let total_bytes = std::fs::metadata(&path)
+        .map_err(|error| format!("Could not read image metadata: {error}"))?
+        .len();
+    let _ = app.emit(
+        "lost-filesystem-progress",
+        LostScanProgress {
+            scanned_bytes: 0,
+            total_bytes,
+        },
+    );
+    let mut last_reported = 0_u64;
+    let scan = recovery_core::search_lost_filesystems(path, |scanned_bytes, total_bytes| {
+        if scanned_bytes == total_bytes
+            || scanned_bytes.saturating_sub(last_reported) >= 32 * 1024 * 1024
+        {
+            let _ = app.emit(
+                "lost-filesystem-progress",
+                LostScanProgress {
+                    scanned_bytes,
+                    total_bytes,
+                },
+            );
+            last_reported = scanned_bytes;
+        }
+        !LOST_SCAN_CANCELLED.load(Ordering::SeqCst)
+    })
+    .map_err(|error| error.to_string())?;
+
+    Ok(LostScanReview {
+        image_bytes: scan.image_bytes,
+        scanned_bytes: scan.scanned_bytes,
+        complete: scan.complete,
+        candidates: scan.candidates.into_iter().map(partition_review).collect(),
+    })
+}
+
+#[tauri::command]
+fn cancel_lost_filesystem_search() {
+    LOST_SCAN_CANCELLED.store(true, Ordering::SeqCst);
+}
+
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             inspect_image,
             list_physical_sources,
-            scan_image
+            scan_image,
+            search_lost_filesystems,
+            cancel_lost_filesystem_search
         ])
         .run(tauri::generate_context!())
         .expect("failed to run DiskRescue");

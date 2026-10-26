@@ -212,6 +212,12 @@ h2 { margin-bottom: 0; color: var(--paper); font-family: Georgia, serif; font-si
 .scan-empty, .scan-limitation { margin: 0; padding: 12px 14px; }
 .scan-limitation { border-top: 1px solid var(--line); }
 .scan-warning { margin: 0; padding: 12px 14px; color: var(--amber); font-size: 11px; }
+.lost-scan-panel { margin-top: 12px; padding-top: 2px; border-top: 1px solid var(--line); }
+.lost-scan-progress { display: grid; gap: 8px; padding: 12px 0; }
+.lost-scan-progress > div { display: flex; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 10px; }
+.lost-scan-progress progress { width: 100%; height: 5px; accent-color: var(--acid); }
+.lost-scan-progress .text-button { justify-self: end; cursor: pointer; }
+.lost-scan-results { margin-bottom: 14px; }
 
 .inventory-heading {
   display: flex;

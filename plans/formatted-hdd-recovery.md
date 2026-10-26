@@ -126,8 +126,8 @@ and safe export.
      structurally consistent NTFS or ext4 signatures.
    - [x] Recover partition entries from a valid backup GPT when the primary GPT
      header or table is damaged.
-   - [ ] Search image regions for lost filesystem starts when partition tables
-     are unavailable; report unreadable and unsupported areas.
+   - [x] Search image regions at 512-byte boundaries for validated NTFS and
+     ext4 starts, skipping known partitions and supporting progress/cancellation.
 6. **Recover metadata-backed files.** For the first supported filesystems,
    list recoverable deleted entries with names and paths where metadata
    survives; let the user export selected files to a separate destination.

@@ -8,7 +8,7 @@ use std::path::Path;
 
 #[cfg(test)]
 mod tests {
-    use super::{RecoveryScan, inspect_image, scan_image};
+    use super::{RecoveryScan, inspect_image, scan_image, search_lost_filesystems};
     use partition_hunter::FileSystemKind;
     use std::fs;
     use std::path::PathBuf;
@@ -44,6 +44,8 @@ mod tests {
             FileSystemKind::Ntfs
         );
         assert!(partition.issue.is_none());
+        let lost_scan = search_lost_filesystems(&path, |_, _| true).unwrap();
+        assert!(lost_scan.candidates.is_empty());
         fs::remove_file(path).unwrap();
     }
 
@@ -110,6 +112,74 @@ mod tests {
         fs::remove_file(path).unwrap();
     }
 
+    #[test]
+    fn finds_a_lost_ext4_start_without_a_partition_table() {
+        let path = temporary_image_path();
+        let mut image = vec![0_u8; 64 * 1024];
+        let superblock = &mut image[4096 + 1024..4096 + 2048];
+        superblock[0..4].copy_from_slice(&32_u32.to_le_bytes());
+        superblock[4..8].copy_from_slice(&32_u32.to_le_bytes());
+        superblock[24..28].copy_from_slice(&0_u32.to_le_bytes());
+        superblock[32..36].copy_from_slice(&16_u32.to_le_bytes());
+        superblock[0x38..0x3a].copy_from_slice(&[0x53, 0xef]);
+        fs::write(&path, image).unwrap();
+
+        let scan = search_lost_filesystems(&path, |_, _| true).unwrap();
+
+        assert!(scan.complete);
+        assert_eq!(scan.candidates.len(), 1);
+        assert_eq!(scan.candidates[0].offset_bytes, 4096);
+        assert_eq!(
+            scan.candidates[0].filesystem.as_ref().unwrap().kind,
+            FileSystemKind::Ext4
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn finds_a_lost_ntfs_start_on_a_512_byte_boundary() {
+        let path = temporary_image_path();
+        let mut image = vec![0_u8; 64 * 1024];
+        let boot = &mut image[4096..4608];
+        boot[3..11].copy_from_slice(b"NTFS    ");
+        boot[11..13].copy_from_slice(&512_u16.to_le_bytes());
+        boot[13] = 8;
+        boot[40..48].copy_from_slice(&32_u64.to_le_bytes());
+        boot[48..56].copy_from_slice(&2_u64.to_le_bytes());
+        boot[56..64].copy_from_slice(&3_u64.to_le_bytes());
+        boot[510..512].copy_from_slice(&[0x55, 0xaa]);
+        fs::write(&path, image).unwrap();
+
+        let scan = search_lost_filesystems(&path, |_, _| true).unwrap();
+
+        assert_eq!(scan.candidates.len(), 1);
+        assert_eq!(scan.candidates[0].offset_bytes, 4096);
+        assert_eq!(
+            scan.candidates[0].filesystem.as_ref().unwrap().kind,
+            FileSystemKind::Ntfs
+        );
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn lost_filesystem_search_returns_partial_results_when_cancelled() {
+        let path = temporary_image_path();
+        let mut image = vec![0_u8; 64 * 1024];
+        let superblock = &mut image[4096 + 1024..4096 + 2048];
+        superblock[0..4].copy_from_slice(&32_u32.to_le_bytes());
+        superblock[4..8].copy_from_slice(&32_u32.to_le_bytes());
+        superblock[24..28].copy_from_slice(&0_u32.to_le_bytes());
+        superblock[32..36].copy_from_slice(&16_u32.to_le_bytes());
+        superblock[0x38..0x3a].copy_from_slice(&[0x53, 0xef]);
+        fs::write(&path, image).unwrap();
+
+        let scan = search_lost_filesystems(&path, |_, _| false).unwrap();
+
+        assert!(!scan.complete);
+        assert_eq!(scan.candidates.len(), 1);
+        fs::remove_file(path).unwrap();
+    }
+
     fn test_crc32(bytes: &[u8]) -> u32 {
         let mut crc = !0_u32;
         for byte in bytes {
@@ -156,6 +226,14 @@ pub struct RecoveryScan {
     pub partition_candidates: Vec<PartitionFinding>,
     pub mbr_error: Option<String>,
     pub gpt_error: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct LostFilesystemScan {
+    pub image_bytes: u64,
+    pub scanned_bytes: u64,
+    pub complete: bool,
+    pub candidates: Vec<PartitionFinding>,
 }
 
 pub fn inspect_image(path: impl AsRef<Path>) -> io::Result<ImageInspection> {
@@ -332,4 +410,128 @@ fn inspect_partition<R: ReadAt>(
             issue: Some(format!("Could not inspect partition: {error}")),
         },
     }
+}
+
+/// Searches a disk image at 512-byte boundaries for NTFS boot sectors and
+/// ext4 superblocks. Reads in bounded chunks and skips known partition ranges.
+/// Returning `false` from `report_progress` stops the scan and returns the
+/// findings collected so far with `complete` set to `false`.
+pub fn search_lost_filesystems<F>(
+    path: impl AsRef<Path>,
+    mut report_progress: F,
+) -> io::Result<LostFilesystemScan>
+where
+    F: FnMut(u64, u64) -> bool,
+{
+    const CHUNK_BYTES: u64 = 1024 * 1024;
+    const MAX_LOOKAHEAD: u64 = 2048;
+    let path = path.as_ref();
+    let known_scan = scan_image(path)?;
+    let mut known_ranges = known_scan
+        .partition_candidates
+        .into_iter()
+        .filter_map(|partition| {
+            partition
+                .offset_bytes
+                .checked_add(partition.length_bytes)
+                .map(|end| (partition.offset_bytes, end))
+        })
+        .collect::<Vec<_>>();
+    known_ranges.sort_unstable();
+
+    let image = ImageReader::open(path)?;
+    let image_bytes = image.len();
+    if image_bytes == 0 {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "cannot search an empty image",
+        ));
+    }
+
+    let mut candidates = Vec::new();
+    let mut scanned_bytes = 0_u64;
+    let mut known_range_index = 0_usize;
+    let mut complete = true;
+    while scanned_bytes < image_bytes {
+        let segment_bytes = CHUNK_BYTES.min(image_bytes - scanned_bytes);
+        let read_bytes = segment_bytes
+            .saturating_add(MAX_LOOKAHEAD)
+            .min(image_bytes - scanned_bytes);
+        let read_length = usize::try_from(read_bytes).map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "scan chunk does not fit in memory",
+            )
+        })?;
+        let mut buffer = vec![0_u8; read_length];
+        image.read_exact_at(scanned_bytes, &mut buffer)?;
+
+        let segment_length = usize::try_from(segment_bytes).map_err(|_| {
+            io::Error::new(io::ErrorKind::InvalidInput, "scan segment is too large")
+        })?;
+        let mut local_offset = 0_usize;
+        while local_offset < segment_length && local_offset + 512 <= buffer.len() {
+            let candidate_offset =
+                scanned_bytes
+                    .checked_add(local_offset as u64)
+                    .ok_or_else(|| {
+                        io::Error::new(io::ErrorKind::InvalidData, "scan offset overflows")
+                    })?;
+            while known_range_index < known_ranges.len()
+                && known_ranges[known_range_index].1 <= candidate_offset
+            {
+                known_range_index += 1;
+            }
+            let in_known_partition = known_ranges
+                .get(known_range_index)
+                .is_some_and(|(start, end)| *start <= candidate_offset && candidate_offset < *end);
+            let ntfs_signature = &buffer[local_offset + 3..local_offset + 11] == b"NTFS    ";
+            let ext4_magic_offset = local_offset.checked_add(1080);
+            let ext4_signature = ext4_magic_offset.is_some_and(|magic_offset| {
+                buffer
+                    .get(magic_offset..magic_offset + 2)
+                    .is_some_and(|magic| magic == [0x53, 0xef])
+            });
+
+            if !in_known_partition && (ntfs_signature || ext4_signature) {
+                let remaining_bytes = image_bytes - candidate_offset;
+                if let Some(filesystem) =
+                    identify_filesystem(&image, candidate_offset, remaining_bytes)?
+                {
+                    let Some(end) = candidate_offset.checked_add(filesystem.length_bytes) else {
+                        local_offset += 512;
+                        continue;
+                    };
+                    candidates.push(PartitionFinding {
+                        table: "Lost scan",
+                        index: u32::try_from(candidates.len() + 1).unwrap_or(u32::MAX),
+                        type_label: "Filesystem start signature".to_owned(),
+                        offset_bytes: candidate_offset,
+                        length_bytes: filesystem.length_bytes,
+                        filesystem: Some(filesystem),
+                        issue: None,
+                    });
+                    known_ranges.push((candidate_offset, end));
+                    known_ranges.sort_unstable();
+                    known_range_index = 0;
+                }
+            }
+            local_offset += 512;
+        }
+
+        scanned_bytes = scanned_bytes
+            .checked_add(segment_bytes)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "scan progress overflows"))?;
+        if !report_progress(scanned_bytes, image_bytes) {
+            complete = false;
+            break;
+        }
+    }
+
+    Ok(LostFilesystemScan {
+        image_bytes,
+        scanned_bytes,
+        complete,
+        candidates,
+    })
 }

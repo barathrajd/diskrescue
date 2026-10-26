@@ -52,12 +52,32 @@ export type ImageScan = {
   partitions: PartitionFinding[];
 };
 
+export type LostScanProgress = {
+  scannedBytes: number;
+  totalBytes: number;
+};
+
+export type LostImageScan = {
+  imageBytes: number;
+  scannedBytes: number;
+  complete: boolean;
+  candidates: PartitionFinding[];
+};
+
 export async function listPhysicalSources() {
   return invoke<PhysicalSource[]>('list_physical_sources');
 }
 
 export async function scanImage(path: string) {
   return invoke<ImageScan>('scan_image', { path });
+}
+
+export async function searchLostFilesystems(path: string) {
+  return invoke<LostImageScan>('search_lost_filesystems', { path });
+}
+
+export async function cancelLostFilesystemSearch() {
+  await invoke('cancel_lost_filesystem_search');
 }
 
 export function useDiskImageSelection() {
