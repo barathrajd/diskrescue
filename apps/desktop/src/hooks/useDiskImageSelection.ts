@@ -26,7 +26,16 @@ export type PhysicalSource = {
   externalStateKnown: boolean;
   isExternal: boolean;
   mountPoints: string[];
+  partitions: PhysicalPartition[];
   eligibilityReason: string | null;
+};
+
+export type PhysicalPartition = {
+  id: string;
+  name: string | null;
+  sizeBytes: number;
+  kind: string | null;
+  mountPoints: string[];
 };
 
 export type FilesystemFinding = {

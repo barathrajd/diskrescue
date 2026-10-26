@@ -19,6 +19,7 @@ function App() {
   const { selectedImage, imageReview, message, chooseImage } = useDiskImageSelection();
   const [physicalSources, setPhysicalSources] = useState<PhysicalSource[] | null>(null);
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
+  const [selectedPartitionId, setSelectedPartitionId] = useState<string | null>(null);
   const [sourceMessage, setSourceMessage] = useState('');
   const [sourcesLoading, setSourcesLoading] = useState(false);
   const [imageScan, setImageScan] = useState<{ path: string; result: ImageScan } | null>(null);
@@ -32,6 +33,7 @@ function App() {
   const [deletedFileScanMessage, setDeletedFileScanMessage] = useState('');
   const [deletedFileScanLoading, setDeletedFileScanLoading] = useState(false);
   const [fileCategory, setFileCategory] = useState<'photos' | 'videos' | 'all'>('all');
+  const selectedSource = physicalSources?.find((source) => source.id === selectedSourceId) ?? null;
 
   async function refreshPhysicalSources() {
     setSourceMessage('');
@@ -228,7 +230,10 @@ function App() {
                         className="source-select-button"
                         type="button"
                         aria-pressed={isSelected}
-                        onClick={() => setSelectedSourceId(source.id)}
+                          onClick={() => {
+                            setSelectedSourceId(source.id);
+                            setSelectedPartitionId(null);
+                          }}
                       >
                         {isSelected ? 'Selected' : 'Select drive'}
                       </button>
@@ -240,38 +245,57 @@ function App() {
             {selectedSourceId && (
               <p className="source-safety-note">Source selected for this session. Physical imaging is unavailable in this preview; no disk contents have been read.</p>
             )}
-            <p className="source-safety-note">Do not mount or repair the original. Select an existing image below until safe physical imaging is available.</p>
+            <p className="source-safety-note">Do not mount or repair the original. Partition details below come from device metadata only.</p>
           </section>
 
           <div className="work-grid">
             <section className="image-panel" aria-labelledby="image-heading">
               <div className="panel-heading">
                 <div>
-                  <div className="panel-kicker">IMAGE INPUT / 02</div>
-                  <h2 id="image-heading">Open an existing disk image</h2>
+                  <div className="panel-kicker">PARTITIONS / 02 · DEVICE METADATA</div>
+                  <h2 id="image-heading">Partitions on the selected drive</h2>
                 </div>
-                <span className="panel-status"><span /> IMAGE INPUT</span>
+                <button className="browse-button inventory-refresh" onClick={chooseImage} type="button">
+                  {selectedImage ? 'Choose another image' : 'Use existing image'} <span aria-hidden="true">↗</span>
+                </button>
               </div>
 
-              {!selectedImage ? (
-                <button className="dropzone" onClick={chooseImage} type="button">
-                  <span className="drop-icon" aria-hidden="true">
-                    <svg viewBox="0 0 32 32" fill="none">
-                      <path d="M16 21V6m0 0-6 6m6-6 6 6M6 20v6h20v-6" />
-                    </svg>
-                  </span>
-                  <span className="drop-title">Select an image file</span>
-                  <span className="drop-subtitle">Raw disk images · IMG, DD, RAW, DMG, ISO</span>
-                  <span className="browse-button">Browse files <span aria-hidden="true">↗</span></span>
-                </button>
+              {!selectedSource ? (
+                <p className="inventory-empty">Select an external drive above to load its partition list.</p>
+              ) : selectedSource.partitions.length === 0 ? (
+                <p className="inventory-empty">No partitions were reported for {selectedSource.model ?? selectedSource.id}.</p>
               ) : (
-                <div className="selected-file" aria-live="polite">
+                <div className="partition-list" aria-label="External drive partitions">
+                  {selectedSource.partitions.map((partition) => {
+                    const active = partition.id === selectedPartitionId;
+                    return (
+                      <button
+                        className={`partition-row${active ? ' partition-row-selected' : ''}`}
+                        key={partition.id}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => setSelectedPartitionId(partition.id)}
+                      >
+                        <span className="partition-icon" aria-hidden="true">▤</span>
+                        <span className="partition-main"><strong>{partition.name ?? partition.id}</strong><small>{partition.id} · {partition.kind ?? 'Filesystem unknown'}</small></span>
+                        <span className="partition-size">{formatBytes(partition.sizeBytes)}</span>
+                        <span className="partition-mount">{partition.mountPoints.length ? `Mounted: ${partition.mountPoints.join(', ')}` : 'Not mounted'}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {selectedPartitionId && (
+                <p className="partition-safety-note">Partition selected. This build lists partition metadata here; recovery scans still require an existing image. Selecting a partition does not read or mount it.</p>
+              )}
+              {selectedImage && (
+                <div className="selected-file selected-image-inline" aria-live="polite">
                   <div className="file-emblem" aria-hidden="true">IMG</div>
                   <div className="file-details">
                     <strong title={selectedImage.name}>{selectedImage.name}</strong>
-                    <span>{imageReview ? formatBytes(imageReview.imageBytes) : 'Selected locally'} <i /> Read-only inspection</span>
+                    <span>{imageReview ? formatBytes(imageReview.imageBytes) : 'Selected locally'} <i /> Read-only image</span>
                   </div>
-                  <button className="text-button" onClick={chooseImage} type="button">Choose another</button>
                 </div>
               )}
 

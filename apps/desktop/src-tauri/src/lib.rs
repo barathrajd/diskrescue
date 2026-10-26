@@ -20,7 +20,18 @@ struct PhysicalSource {
     external_state_known: bool,
     is_external: bool,
     mount_points: Vec<String>,
+    partitions: Vec<PhysicalPartition>,
     eligibility_reason: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PhysicalPartition {
+    id: String,
+    name: Option<String>,
+    size_bytes: u64,
+    kind: Option<String>,
+    mount_points: Vec<String>,
 }
 
 fn source_imaging_blocker(source: &PhysicalSource) -> Option<&'static str> {
@@ -72,6 +83,7 @@ fn make_physical_source(
         external_state_known,
         is_external,
         mount_points,
+        partitions: Vec::new(),
         eligibility_reason: None,
     };
     source.eligibility_reason = source_imaging_blocker(&source).map(str::to_owned);
@@ -119,7 +131,7 @@ fn parse_linux_sources(inventory: &str) -> Result<Vec<PhysicalSource>, String> {
         if !external_state_known || !is_external {
             continue;
         }
-        sources.push(make_physical_source(
+        let mut source = make_physical_source(
             id,
             json_string(disk, "model"),
             json_string(disk, "serial"),
@@ -132,10 +144,37 @@ fn parse_linux_sources(inventory: &str) -> Result<Vec<PhysicalSource>, String> {
             external_state_known,
             is_external,
             mount_points,
-        ));
+        );
+        source.partitions = linux_partitions(disk);
+        sources.push(source);
     }
 
     Ok(sources)
+}
+
+#[cfg(any(target_os = "linux", test))]
+fn linux_partitions(disk: &serde_json::Value) -> Vec<PhysicalPartition> {
+    disk.get("children")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|child| child.get("type").and_then(serde_json::Value::as_str) == Some("part"))
+        .filter_map(|child| {
+            let id = json_string(child, "path").or_else(|| json_string(child, "name"))?;
+            let mut mount_points = Vec::new();
+            collect_linux_mount_points(child, &mut mount_points);
+            Some(PhysicalPartition {
+                id,
+                name: json_string(child, "label").or_else(|| json_string(child, "partlabel")),
+                size_bytes: child
+                    .get("size")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0),
+                kind: json_string(child, "fstype"),
+                mount_points,
+            })
+        })
+        .collect()
 }
 
 #[cfg(any(target_os = "linux", test))]
@@ -259,7 +298,7 @@ fn parse_windows_sources(inventory: &str) -> Result<Vec<PhysicalSource>, String>
                     .and_then(serde_json::Value::as_array)
                     .is_some()
             });
-        sources.push(make_physical_source(
+        let mut source = make_physical_source(
             format!("PhysicalDrive{number}"),
             json_string(disk, "FriendlyName"),
             json_string(disk, "SerialNumber"),
@@ -272,10 +311,50 @@ fn parse_windows_sources(inventory: &str) -> Result<Vec<PhysicalSource>, String>
             external_state_known,
             is_external,
             mount_points,
-        ));
+        );
+        source.partitions = windows_partitions(disk, number);
+        sources.push(source);
     }
 
     Ok(sources)
+}
+
+#[cfg(any(target_os = "windows", test))]
+fn windows_partitions(disk: &serde_json::Value, disk_number: u64) -> Vec<PhysicalPartition> {
+    disk.get("Partitions")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|partition| {
+            let number = partition
+                .get("PartitionNumber")
+                .and_then(serde_json::Value::as_u64)?;
+            let drive_letter = json_string(partition, "DriveLetter");
+            let mut mount_points = partition
+                .get("AccessPaths")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_owned)
+                .collect::<Vec<_>>();
+            if let Some(letter) = drive_letter.as_deref() {
+                mount_points.push(format!("{letter}:\\"));
+            }
+            mount_points.sort();
+            mount_points.dedup();
+            Some(PhysicalPartition {
+                id: format!("PhysicalDrive{disk_number}Partition{number}"),
+                name: drive_letter,
+                size_bytes: partition
+                    .get("Size")
+                    .and_then(serde_json::Value::as_u64)
+                    .unwrap_or(0),
+                kind: json_string(partition, "Type"),
+                mount_points,
+            })
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -303,7 +382,7 @@ fn list_linux_sources() -> Result<Vec<PhysicalSource>, String> {
             "--bytes",
             "--tree",
             "--output",
-            "NAME,PATH,TYPE,SIZE,MODEL,SERIAL,MOUNTPOINTS,RM,TRAN",
+            "NAME,PATH,TYPE,SIZE,MODEL,SERIAL,MOUNTPOINTS,RM,TRAN,FSTYPE,LABEL,PARTLABEL",
         ])
         .output()
         .map_err(|_| "Could not start lsblk to list physical disks".to_owned())?;
@@ -317,7 +396,7 @@ fn list_linux_sources() -> Result<Vec<PhysicalSource>, String> {
 
 #[cfg(target_os = "windows")]
 fn list_windows_sources() -> Result<Vec<PhysicalSource>, String> {
-    const SCRIPT: &str = "$disks = Get-Disk | ForEach-Object { $disk = $_; $parts = @(); $partitionStateKnown = $true; try { $parts = @(Get-Partition -DiskNumber $disk.Number -ErrorAction Stop | Select-Object DriveLetter, AccessPaths) } catch { $partitionStateKnown = $false }; [pscustomobject]@{ Number = $disk.Number; FriendlyName = $disk.FriendlyName; SerialNumber = $disk.SerialNumber; Size = $disk.Size; BusType = [string]$disk.BusType; IsBoot = $disk.IsBoot; IsSystem = $disk.IsSystem; PartitionStateKnown = $partitionStateKnown; Partitions = $parts } }; ConvertTo-Json -InputObject @($disks) -Depth 4 -Compress";
+    const SCRIPT: &str = "$disks = Get-Disk | ForEach-Object { $disk = $_; $parts = @(); $partitionStateKnown = $true; try { $parts = @(Get-Partition -DiskNumber $disk.Number -ErrorAction Stop | Select-Object PartitionNumber, Size, Type, DriveLetter, AccessPaths) } catch { $partitionStateKnown = $false }; [pscustomobject]@{ Number = $disk.Number; FriendlyName = $disk.FriendlyName; SerialNumber = $disk.SerialNumber; Size = $disk.Size; BusType = [string]$disk.BusType; IsBoot = $disk.IsBoot; IsSystem = $disk.IsSystem; PartitionStateKnown = $partitionStateKnown; Partitions = $parts } }; ConvertTo-Json -InputObject @($disks) -Depth 4 -Compress";
     let output = Command::new("powershell.exe")
         .args([
             "-NoLogo",
@@ -370,16 +449,32 @@ fn list_macos_sources() -> Result<Vec<PhysicalSource>, String> {
         let info = run_plist_command("diskutil", &["info", "-plist", &device_path]).ok();
         let dictionary = info.as_ref().and_then(plist::Value::as_dictionary);
         let mut mount_points = Vec::new();
+        let mut physical_partitions = Vec::new();
         let mut mount_state_known = partition_inventory_known;
         for partition_id in macos_partition_ids(&partitions, identifier) {
             let partition_path = format!("/dev/{partition_id}");
             match run_plist_command("diskutil", &["info", "-plist", &partition_path]) {
                 Ok(partition_info) => {
-                    if let Some(mount) = partition_info
-                        .as_dictionary()
-                        .and_then(|dictionary| plist_string(dictionary, "MountPoint"))
-                    {
-                        mount_points.push(mount);
+                    let partition_dictionary = partition_info.as_dictionary();
+                    let partition_mount = partition_dictionary
+                        .and_then(|dictionary| plist_string(dictionary, "MountPoint"));
+                    if let Some(mount) = partition_mount.as_ref() {
+                        mount_points.push(mount.clone());
+                    }
+                    if let Some(dictionary) = partition_dictionary {
+                        physical_partitions.push(PhysicalPartition {
+                            id: partition_id.clone(),
+                            name: plist_string(dictionary, "VolumeName")
+                                .or_else(|| plist_string(dictionary, "MediaName")),
+                            size_bytes: dictionary
+                                .get("TotalSize")
+                                .or_else(|| dictionary.get("Size"))
+                                .and_then(plist::Value::as_unsigned_integer)
+                                .unwrap_or(0),
+                            kind: plist_string(dictionary, "FilesystemType")
+                                .or_else(|| plist_string(dictionary, "Content")),
+                            mount_points: partition_mount.into_iter().collect(),
+                        });
                     }
                 }
                 Err(_) => mount_state_known = false,
@@ -420,7 +515,7 @@ fn list_macos_sources() -> Result<Vec<PhysicalSource>, String> {
         if !external_state_known || !is_external {
             continue;
         }
-        sources.push(make_physical_source(
+        let mut source = make_physical_source(
             source_id.clone(),
             model,
             serial,
@@ -432,7 +527,9 @@ fn list_macos_sources() -> Result<Vec<PhysicalSource>, String> {
             external_state_known,
             is_external,
             mount_points,
-        ));
+        );
+        source.partitions = physical_partitions;
+        sources.push(source);
     }
 
     Ok(sources)
@@ -745,6 +842,7 @@ mod tests {
             external_state_known: true,
             is_external: true,
             mount_points: Vec::new(),
+            partitions: Vec::new(),
             eligibility_reason: None,
         };
 
@@ -783,6 +881,9 @@ mod tests {
         assert_eq!(sources[0].id, "/dev/sdb");
         assert_eq!(sources[0].serial.as_deref(), Some("SERIAL-B"));
         assert!(sources[0].is_external);
+        assert_eq!(sources[0].partitions.len(), 1);
+        assert_eq!(sources[0].partitions[0].id, "/dev/sdb1");
+        assert_eq!(sources[0].partitions[0].size_bytes, 1000);
         assert_eq!(sources[0].mount_points, ["/media/user/RECOVERY"]);
         assert_eq!(
             source_imaging_blocker(&sources[0]),
@@ -798,13 +899,15 @@ mod tests {
 
     #[test]
     fn parses_windows_disk_inventory_and_system_flags() {
-        let inventory = r#"[{"Number":0,"FriendlyName":"Internal SSD","SerialNumber":"SERIAL-I","Size":4000,"BusType":"NVMe","IsBoot":true,"IsSystem":true,"Partitions":[{"DriveLetter":"C"}]},{"Number":2,"FriendlyName":"External HDD","SerialNumber":"SERIAL-C","Size":2000,"BusType":"USB","IsBoot":false,"IsSystem":true,"Partitions":[{"DriveLetter":"E"}]}]"#;
+        let inventory = r#"[{"Number":0,"FriendlyName":"Internal SSD","SerialNumber":"SERIAL-I","Size":4000,"BusType":"NVMe","IsBoot":true,"IsSystem":true,"Partitions":[{"PartitionNumber":1,"Size":4000,"Type":"Basic","DriveLetter":"C"}]},{"Number":2,"FriendlyName":"External HDD","SerialNumber":"SERIAL-C","Size":2000,"BusType":"USB","IsBoot":false,"IsSystem":true,"Partitions":[{"PartitionNumber":1,"Size":2000,"Type":"Basic","DriveLetter":"E"}]}]"#;
 
         let sources = parse_windows_sources(inventory).unwrap();
 
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].id, "PhysicalDrive2");
         assert_eq!(sources[0].serial.as_deref(), Some("SERIAL-C"));
+        assert_eq!(sources[0].partitions[0].id, "PhysicalDrive2Partition1");
+        assert_eq!(sources[0].partitions[0].size_bytes, 2000);
         assert!(sources[0].is_system);
         assert!(sources[0].is_external);
         assert_eq!(
