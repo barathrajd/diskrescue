@@ -18,6 +18,7 @@ function formatBytes(bytes: number): string {
 function App() {
   const { selectedImage, imageReview, message, chooseImage } = useDiskImageSelection();
   const [physicalSources, setPhysicalSources] = useState<PhysicalSource[] | null>(null);
+  const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null);
   const [sourceMessage, setSourceMessage] = useState('');
   const [sourcesLoading, setSourcesLoading] = useState(false);
   const [imageScan, setImageScan] = useState<{ path: string; result: ImageScan } | null>(null);
@@ -32,7 +33,13 @@ function App() {
     setSourceMessage('');
     setSourcesLoading(true);
     try {
-      setPhysicalSources(await listPhysicalSources());
+      const sources = await listPhysicalSources();
+      setPhysicalSources(sources);
+      setSelectedSourceId((current) =>
+        current && sources.some((source) => source.id === current)
+          ? current
+          : sources[0]?.id ?? null,
+      );
     } catch (error) {
       setSourceMessage(error instanceof Error ? error.message : 'Could not list physical disks.');
     } finally {
@@ -134,10 +141,10 @@ function App() {
           <div className="hero-grid">
             <div className="hero-copy">
               <div className="eyebrow"><span className="eyebrow-line" /> A CAREFUL WAY BACK</div>
-              <h1>Recover from a copy.<br /><em>Keep the original safe.</em></h1>
+              <h1>Choose the external drive first.<br /><em>Keep it untouched.</em></h1>
               <p className="hero-description">
-                DiskRescue works from a disk image so the affected drive stays untouched.
-                Start with an image you have already created.
+                Select an external source, then work from a disk image. This preview can inspect an
+                existing image; physical imaging and file recovery are still in development.
               </p>
             </div>
             <div className="hero-index" aria-hidden="true">
@@ -150,18 +157,67 @@ function App() {
           <section className="safety-strip" aria-label="Safety requirements">
             <div className="safety-icon" aria-hidden="true">!</div>
             <div className="safety-copy">
-              <strong>Do not scan the affected drive directly.</strong>
-              <span>Create an image with a recovery tool such as GNU ddrescue, then select that image here.</span>
+              <strong>Do not mount, repair, or scan the affected drive.</strong>
+              <span>DiskRescue keeps internal drives locked. Use an existing disk image below; this preview cannot image a physical drive yet.</span>
             </div>
             <span className="safety-tag">SOURCE PROTECTED</span>
+          </section>
+
+          <section className="source-inventory" aria-labelledby="physical-sources-heading">
+            <div className="inventory-heading">
+              <div>
+                <div className="panel-kicker">SOURCE / 01 · EXTERNAL ONLY</div>
+                <h2 id="physical-sources-heading">Select an external drive</h2>
+                <p>Internal and unclassified drives are hidden. Listing reads device metadata only.</p>
+              </div>
+              <button className="browse-button inventory-refresh" onClick={refreshPhysicalSources} disabled={sourcesLoading} type="button">
+                {sourcesLoading ? 'Checking…' : 'Refresh drives'} <span aria-hidden="true">↻</span>
+              </button>
+            </div>
+            {sourceMessage && <p className="input-message" role="alert">{sourceMessage}</p>}
+            {physicalSources && (physicalSources.length === 0 ? (
+              <p className="inventory-empty" aria-live="polite">No confirmed external drives were reported. Drives with unknown type stay hidden.</p>
+            ) : (
+              <div className="source-list" aria-live="polite">
+                {physicalSources.map((source) => {
+                  const isSelected = source.id === selectedSourceId;
+                  return (
+                    <article className={`source-row${isSelected ? ' source-row-selected' : ''}`} key={source.id}>
+                      <div className="source-device-icon" aria-hidden="true">▤</div>
+                      <div className="source-main">
+                        <strong>{source.model ?? 'Model unavailable'}</strong>
+                        <span>{source.id} · {formatBytes(source.capacityBytes)}</span>
+                        <small>Serial: {source.serial ?? 'Unavailable'} · {source.isSystem ? 'System disk' : source.systemStateKnown ? 'Not system disk' : 'System state unknown'} · {source.mountPoints.length ? `Mounted at ${source.mountPoints.join(', ')}` : source.mountStateKnown ? 'No mounted volumes found' : 'Mount state unknown'}</small>
+                      </div>
+                      <div className={source.eligibilityReason ? 'source-eligibility blocked' : 'source-eligibility'}>
+                        <span>{source.eligibilityReason ?? 'External drive detected'}</span>
+                        <small>Metadata only · imaging unavailable in this preview</small>
+                      </div>
+                      <button
+                        className="source-select-button"
+                        type="button"
+                        aria-pressed={isSelected}
+                        onClick={() => setSelectedSourceId(source.id)}
+                      >
+                        {isSelected ? 'Selected' : 'Select drive'}
+                      </button>
+                    </article>
+                  );
+                })}
+              </div>
+            ))}
+            {selectedSourceId && (
+              <p className="source-safety-note">Source selected for this session. Physical imaging is unavailable in this preview; no disk contents have been read.</p>
+            )}
+            <p className="source-safety-note">Do not mount or repair the original. Select an existing image below until safe physical imaging is available.</p>
           </section>
 
           <div className="work-grid">
             <section className="image-panel" aria-labelledby="image-heading">
               <div className="panel-heading">
                 <div>
-                  <div className="panel-kicker">SOURCE / 01</div>
-                  <h2 id="image-heading">Choose a disk image</h2>
+                  <div className="panel-kicker">IMAGE INPUT / 02</div>
+                  <h2 id="image-heading">Open an existing disk image</h2>
                 </div>
                 <span className="panel-status"><span /> IMAGE INPUT</span>
               </div>
@@ -287,17 +343,17 @@ function App() {
               <ol className="workflow-list">
                 <li className="workflow-current">
                   <span className="step-number">01</span>
-                  <span className="step-copy"><strong>Choose an image</strong><small>Use a copy of the affected drive</small></span>
+                  <span className="step-copy"><strong>Choose an external drive</strong><small>Internal drives stay locked</small></span>
                   <span className="step-state">NOW</span>
                 </li>
                 <li>
                   <span className="step-number">02</span>
-                  <span className="step-copy"><strong>Inspect partitions</strong><small>Read-only scan, no repairs</small></span>
+                  <span className="step-copy"><strong>Open a disk image</strong><small>Physical imaging is not ready yet</small></span>
                   <span className="step-state step-state-next">NEXT</span>
                 </li>
                 <li>
                   <span className="step-number">03</span>
-                  <span className="step-copy"><strong>Recover to another drive</strong><small>Never export to the source</small></span>
+                  <span className="step-copy"><strong>Recover photos and videos</strong><small>File recovery is still in development</small></span>
                   <span className="step-state step-state-later">LATER</span>
                 </li>
               </ol>
@@ -308,43 +364,9 @@ function App() {
             </aside>
           </div>
 
-          <section className="source-inventory" aria-labelledby="physical-sources-heading">
-            <div className="inventory-heading">
-              <div>
-                <div className="panel-kicker">EXTERNAL SOURCES · METADATA ONLY</div>
-                <h2 id="physical-sources-heading">External drives</h2>
-                <p>Only drives confirmed as external are listed. Internal system and data drives stay hidden and locked.</p>
-              </div>
-              <button className="browse-button inventory-refresh" onClick={refreshPhysicalSources} disabled={sourcesLoading} type="button">
-                {sourcesLoading ? 'Checking…' : 'List disks'} <span aria-hidden="true">↻</span>
-              </button>
-            </div>
-            {sourceMessage && <p className="input-message" role="alert">{sourceMessage}</p>}
-            {physicalSources && (physicalSources.length === 0 ? (
-              <p className="inventory-empty" aria-live="polite">No confirmed external drives were reported by this system. Drives with unknown type stay hidden.</p>
-            ) : (
-              <div className="source-list" aria-live="polite">
-                {physicalSources.map((source) => (
-                  <article className="source-row" key={source.id}>
-                    <div className="source-device-icon" aria-hidden="true">▤</div>
-                    <div className="source-main">
-                      <strong>{source.model ?? 'Model unavailable'}</strong>
-                      <span>{source.id} · {formatBytes(source.capacityBytes)}</span>
-                      <small>Serial: {source.serial ?? 'Unavailable'} · {source.isSystem ? 'System disk' : source.systemStateKnown ? 'Not system disk' : 'System state unknown'} · {source.mountPoints.length ? `Mounted at ${source.mountPoints.join(', ')}` : source.mountStateKnown ? 'No mounted volumes found' : 'Mount state unknown'}</small>
-                    </div>
-                    <div className={source.eligibilityReason ? 'source-eligibility blocked' : 'source-eligibility'}>
-                      <span>{source.eligibilityReason ?? 'Metadata checks passed'}</span>
-                      <small>Imaging helper not yet available</small>
-                    </div>
-                  </article>
-                ))}
-              </div>
-            ))}
-          </section>
-
           <section className="build-note" aria-label="Preview build status">
             <span className="build-note-mark" aria-hidden="true">i</span>
-            <p><strong>Preview build.</strong> Image selection, partition-boundary NTFS/ext4 checks and physical disk metadata listing are ready. Lost-partition search, physical imaging and file recovery are still in development.</p>
+            <p><strong>Preview build.</strong> External-drive selection and image inspection are available. Physical imaging and file recovery are still in development.</p>
             <span className="build-note-id">MILESTONE 05 / IMAGE SCAN</span>
           </section>
         </div>

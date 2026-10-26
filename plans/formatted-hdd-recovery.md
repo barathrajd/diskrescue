@@ -150,6 +150,8 @@ and safe export.
 8. **Finish the desktop recovery session.** Add filtering, preview, progress,
    cancellation and resumable checkpoints; record source-image provenance and
    export results without overwriting files silently.
+   - [x] Put external-drive selection before image input; hide internal and
+     unknown drives and omit any source-mount action.
 9. **Verify supported platforms and safety.** Exercise image intake, scanning,
    cancellation, and export on Windows, macOS, and Linux with synthetic images;
    document platform gaps and ensure unsupported paths fail closed.
