@@ -23,12 +23,21 @@ checks pass.
   recovery remains available.
 - The scanner reports partition and filesystem candidates with offsets,
   confidence reasons, and unsupported or unreadable areas.
+- Scans report their current phase and byte progress, can be cancelled safely,
+  and can resume from a durable checkpoint only when the source-image identity
+  and scan format still match.
 - Metadata-based recovery retains names and paths when supported metadata
   survives; carving reports generic names and does not imply original folder
   structure.
 - The first supported catalog covers common document, photo, video, and archive
   formats, with per-file verified, partial, unsupported, or unrecoverable
   results.
+- Actual file results can be browsed by both type and original path, searched,
+  filtered, selected in batches, and previewed when a bounded supported preview
+  is available.
+- Local scan records can be reopened offline; completed results can be viewed,
+  but previews and exports require source identity validation. Incomplete
+  records resume only after that validation.
 - Export rejects unsafe paths, never writes to the source, and does not replace
   existing files without explicit consent.
 - The complete workflow runs without network access and does not require a paid
@@ -50,6 +59,11 @@ establishing a reusable desktop recovery workflow.
   defined catalog of common file formats.
 - Previewing and selecting candidates, then exporting to a separate destination
   with safe path and conflict handling.
+- A DiskRescue-designed results workspace with selectable **Path** and **Type**
+  views, common file categories, search, filters, multi-selection, and bounded
+  previews for supported images and videos.
+- Offline scan records that reopen completed results or resume a compatible
+  incomplete checkpoint.
 - Clear warnings about formatting, overwrite limits, partial files, and drive
   failure symptoms.
 
@@ -59,6 +73,10 @@ establishing a reusable desktop recovery workflow.
   to source media.
 - Guaranteed recovery, reconstruction of overwritten sectors, or a promise to
   support every file format or filesystem in the first release.
+- Cloud recovery, video repair of already recovered files, bootable installer
+  creation, and other separate EaseUS utilities that do not advance this
+  formatted-HDD workflow.
+- Copying EaseUS screens, branding, or proprietary implementation details.
 - Recovery from SSDs, phones, RAID arrays, encrypted filesystems without keys,
   or failing drives that need hardware-level lab work.
 - Network upload, cloud recovery, paid recovery services, and recovery output on
@@ -72,7 +90,46 @@ into the same read-only image pipeline, and require a separate output location
 for both the image and recovered files. Use filesystem metadata first because
 it can retain names and folders, then use validated signatures for supported
 formats when metadata is missing. Signature-based recovery commonly loses
-original names and folder structure, as [PhotoRec's documentation explains](https://www.cgsecurity.org/testdisk_doc/photorec.html).
+original names and folder structure, as [PhotoRec's documentation
+explains](https://www.cgsecurity.org/testdisk_doc/photorec.html).
+
+Use REA's inspection of the installed EaseUS 20.9.0 bundle and the user's
+screenshots as functional references only. They show drive and lost-partition
+selection, phase/progress controls, Path/Type browsing, categories, previews,
+saved scan records, and separate recovery destinations. The bundle also
+declares `.rsf` scan-result and `.edi` disk-image associations. Interface
+resource names indicate additional cloud, unbootable-Mac, SD-card, video-repair,
+backup, and installer screens; those names do not prove runtime behavior. REA
+identified the app and plist, and decoded a bounded subset of interface
+resources. Their Evidence IDs are:
+
+- App inventory:
+  `ev_fa90971f1ab6ceb6cb5bbccf16bdfef50517f7312e321234d11f976700066425`
+- Bundle plist:
+  `ev_215c0db78c58e791f92da089cc0c1817002b6908cfd5180290b26991823bb636`
+- Interface resources:
+  `ev_6f5693ba9bdc9879deb34c52982216c25d9639e1f64eecff9fbe61a955a26b6`
+
+REA's decoder capped that pass at 64 documents, so treat unobserved screens as
+unknown. Keep DiskRescue's current visual language rather than recreating
+EaseUS's layouts.
+
+Keep scan history and its paged result index in a Rust-owned local SQLite
+catalog under Tauri's app-specific data directory. Store a source-image
+fingerprint, scan options/version, status, progress checkpoints, and
+recovered-file metadata; do not copy source file contents or thumbnails into
+the catalog. Compute a full image digest while creating an image or during its
+first file-level scan, then recheck the digest before resuming, previewing, or
+exporting a saved session.
+Tauri's `PathResolver::app_data_dir` provides the application data location,
+and the existing Rust command/event boundary can carry small progress updates
+while commands page file results. See [Tauri's app data
+path](https://docs.rs/tauri/latest/tauri/path/struct.PathResolver.html),
+[Tauri's event guidance](https://v2.tauri.app/develop/calling-frontend/), and
+[`rusqlite`](https://docs.rs/rusqlite/latest/rusqlite/) for the Rust SQLite
+interface. Persist checkpoint state only after a complete bounded scan unit;
+if the source digest or scanner version cannot be verified, mark the record
+stale and offer a new scan from the start.
 
 The repo already has a bounded read-only image reader and basic MBR/GPT image
 inspection, while the file-carving crate is a placeholder. The existing
@@ -81,8 +138,8 @@ PNG, PDF, and ZIP as initial carving formats; this plan extends the carving
 catalog to common videos and documents through fixture-backed format work.
 Microsoft documents quick format as removing the file table and root directory,
 and documents sector zeroing separately under `/P`; the user's recollection of
-“full format” alone does not establish what was overwritten. The app must make
-no recovery prediction until it inspects an image. See [Microsoft's format
+“full format” alone does not establish what was overwritten. The app must
+make no recovery prediction until it inspects an image. See [Microsoft's format
 reference](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/format).
 
 Tauri documents Windows, macOS, and Linux development prerequisites, but
@@ -96,8 +153,9 @@ tool. See [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/),
 [Windows privilege guidance](https://learn.microsoft.com/en-us/windows/win32/secbp/running-with-administrator-privileges),
 [Apple Service Management](https://developer.apple.com/documentation/servicemanagement/smappservice),
 and [polkit](https://www.freedesktop.org/software/polkit/docs/latest/polkit.8).
-The [GNU ddrescue manual](https://www.gnu.org/software/ddrescue/manual/ddrescue_manual.html)
-documents mapfile-based imaging for difficult reads.
+The [GNU ddrescue manual]
+(https://www.gnu.org/software/ddrescue/manual/ddrescue_manual.html) documents
+mapfile-based imaging for difficult reads.
 
 ## Milestones
 
@@ -131,7 +189,8 @@ and safe export.
    - [x] Recover partition entries from a valid backup GPT when the primary GPT
      header or table is damaged.
    - [x] Search image regions at 512-byte boundaries for validated NTFS and
-     ext4 starts, skipping known partitions and supporting progress/cancellation.
+     ext4 starts, skipping known partitions and supporting progress and
+     cancellation.
 6. **Recover metadata-backed files.** For the first supported filesystems,
    list recoverable deleted entries with names and paths where metadata
    survives; let the user export selected files to a separate destination.
@@ -147,16 +206,31 @@ and safe export.
 7. **Carve common file formats.** Add bounded scanners and format validators
    for the agreed common document, photo, video, and archive catalog. Show
    generic names, file integrity status, and likely partial results.
-8. **Finish the desktop recovery session.** Add filtering, preview, progress,
-   cancellation and resumable checkpoints; record source-image provenance and
-   export results without overwriting files silently.
+8. **Add resumable scan sessions.** Deliver real scan state from the Rust
+   scanner to the desktop and persist it for offline review.
    - [x] Put external-drive selection before image input; hide internal and
      unknown drives and omit any source-mount action.
    - [x] Add a photo/video results workspace with type/path navigation and a
      truthful empty state until file-level recovery data is available.
-9. **Verify supported platforms and safety.** Exercise image intake, scanning,
-   cancellation, and export on Windows, macOS, and Linux with synthetic images;
-   document platform gaps and ensure unsupported paths fail closed.
+   - [ ] Show scan phase, bytes checked, total bytes, and volume/file counts;
+     cancel at a safe boundary and persist a checkpoint.
+   - [ ] Save scan records offline with source fingerprint, scan version,
+     status, timestamps, progress, and result counts; reopen completed records
+     and resume an incomplete scan only after digest validation.
+9. **Browse and export actual recovered files.** Populate results from
+   metadata recovery and carving, then export selected candidates safely.
+   - [ ] Provide **Path** and **Type** views, common categories, search,
+     filters, result counts, and batch selection from actual results only.
+   - [ ] Select and verify a destination on a different physical device, check
+     available space, resolve conflicts before writing, and report per-file
+     export status.
+10. **Preview supported media.** Generate bounded previews for validated
+    image/video candidates and explain unsupported or partial previews.
+    - [ ] Keep preview reads bounded and never treat a preview as proof that
+      the complete file can be recovered.
+11. **Verify supported platforms and safety.** Exercise image intake, scanning,
+    cancellation, and export on Windows, macOS, and Linux with synthetic
+    images; document platform gaps and ensure unsupported paths fail closed.
 
 ## Risks & open questions
 
@@ -185,6 +259,24 @@ Resolve these items during implementation or use the listed fallback.
 - **A readable preview does not prove a complete file can be recovered.** Owner:
   recovery engine. Validate exported file structure where possible and report
   partial or corrupt results without promising success.
+- **A saved checkpoint may refer to a moved or changed image.** Owner: recovery
+  engine. Bind each record to a source digest and scanner version; when the
+  digest cannot be revalidated, mark the record stale, disable preview and
+  export, and require a new scan instead of resuming.
+- **Full-image identity checks add read time for existing images and resumes.**
+  Owner: recovery engine. Compute the digest during imaging or the first
+  file-level scan; if digest validation cannot finish, keep the source
+  untouched and require a fresh scan before preview or export.
+- **Large scans can produce a result catalog too large for an in-memory UI.**
+  Owner: recovery engine. Page rows from the local SQLite catalog and keep
+  previews outside the catalog; if catalog performance is insufficient, narrow
+  the first-release result limit and expose the truncation clearly.
+- **The common-format list is not yet extension-specific.** Owner: product and
+  recovery engine. Finalize the fixture-backed list before carving; keep each
+  unsupported type visible as unsupported rather than implying recovery.
+- **Preview decoders receive hostile file contents.** Owner: recovery engine.
+  Use bounded, format-aware decoders and show preview unavailable when a format
+  cannot be validated safely.
 - **Repeated formatting may have overwritten metadata or file contents.**
   Owner: user-facing workflow. Preserve the source, scan only an image, and
   report findings without estimating recovery odds from the word “full.”
@@ -197,6 +289,8 @@ These project safety rules apply to every milestone and supported platform.
   repair, format, initialize, or source-mount operation.
 - Store the disk image and recovered output on separate healthy destinations;
   reject unsafe paths and require explicit consent before replacing a file.
+- Treat the app-data scan catalog as local session metadata, not as a recovery
+  destination; never place it on or write it through the selected source.
 - Keep image data and recovery results local and offline.
 - Use checked arithmetic, bounded reads and allocations, and graceful errors for
   corrupt or truncated image content.
