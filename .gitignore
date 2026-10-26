@@ -1,0 +1,55 @@
+# JavaScript and Rstack output
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+*.tsbuildinfo
+
+# Rust build output
+target/
+**/target/
+Cargo.lock.old
+
+# Tauri-generated metadata (icons are checked in)
+apps/desktop/src-tauri/gen/
+
+# Local-only agent skill copies
+.agents/skills/
+.claude/skills/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.mobileprovision
+
+# Logs, caches, and OS files
+*.log
+.cache/
+.DS_Store
+Thumbs.db
+
+# Disk images, recovery maps, sessions, and recovered data are sensitive
+*.img
+*.img.gz
+*.dd
+*.dd.gz
+*.raw
+*.dmg
+*.iso
+*.e01
+*.vmdk
+*.vhd
+*.vhdx
+*.qcow2
+*.map
+*.mapfile
+*.sqlite
+*.sqlite3
+scan.db
+carve.db
+recovered/
+recovery-output/

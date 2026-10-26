@@ -1,0 +1,6 @@
+[package]
+name = "recovery-exporter"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]

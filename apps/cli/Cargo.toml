@@ -1,0 +1,11 @@
+[package]
+name = "diskrescue-cli"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "diskrescue"
+path = "src/main.rs"
+
+[dependencies]
+recovery-core = { path = "../../crates/recovery-core" }

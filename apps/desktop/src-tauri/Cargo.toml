@@ -1,0 +1,15 @@
+[package]
+name = "diskrescue-desktop"
+version.workspace = true
+edition.workspace = true
+
+[lib]
+name = "diskrescue_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+recovery-core = { path = "../../../crates/recovery-core" }

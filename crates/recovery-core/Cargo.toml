@@ -1,0 +1,8 @@
+[package]
+name = "recovery-core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+disk-reader = { path = "../disk-reader" }
+partition-parser = { path = "../partition-parser" }

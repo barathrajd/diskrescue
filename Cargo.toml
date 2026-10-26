@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+  "apps/cli",
+  "apps/desktop/src-tauri",
+  "crates/disk-reader",
+  "crates/partition-parser",
+  "crates/partition-hunter",
+  "crates/fs-ntfs",
+  "crates/fs-ext4",
+  "crates/file-carver",
+  "crates/recovery-core",
+  "crates/recovery-exporter",
+]
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"

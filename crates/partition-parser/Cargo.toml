@@ -1,0 +1,7 @@
+[package]
+name = "partition-parser"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+disk-reader = { path = "../disk-reader" }

@@ -1,0 +1,7 @@
+[package]
+name = "fs-ext4"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+disk-reader = { path = "../disk-reader" }

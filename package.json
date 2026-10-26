@@ -1,0 +1,14 @@
+{
+  "name": "diskrescue-workspace",
+  "private": true,
+  "packageManager": "pnpm@12.15.0",
+  "scripts": {
+    "desktop:dev": "pnpm --filter @diskrescue/desktop tauri:dev",
+    "desktop:build": "pnpm --filter @diskrescue/desktop tauri:build",
+    "desktop:web": "pnpm --filter @diskrescue/desktop dev",
+    "cli": "cargo run -p diskrescue-cli --"
+  },
+  "devDependencies": {
+    "rstack": "0.8.3"
+  }
+}
