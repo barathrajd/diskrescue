@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { cancelLostFilesystemSearch, listPhysicalSources, scanImage, searchLostFilesystems, useDiskImageSelection, type ImageScan, type LostImageScan, type LostScanProgress, type PhysicalSource } from './hooks/useDiskImageSelection';
 
@@ -39,6 +39,10 @@ function App() {
       setSourcesLoading(false);
     }
   }
+
+  useEffect(() => {
+    void refreshPhysicalSources();
+  }, []);
 
   async function scanSelectedImage() {
     if (!selectedImage) return;
@@ -307,9 +311,9 @@ function App() {
           <section className="source-inventory" aria-labelledby="physical-sources-heading">
             <div className="inventory-heading">
               <div>
-                <div className="panel-kicker">SOURCE / 02 · METADATA ONLY</div>
-                <h2 id="physical-sources-heading">Physical disks</h2>
-                <p>View device identity and mount state. This step does not read disk contents.</p>
+                <div className="panel-kicker">EXTERNAL SOURCES · METADATA ONLY</div>
+                <h2 id="physical-sources-heading">External drives</h2>
+                <p>Only drives confirmed as external are listed. Internal system and data drives stay hidden and locked.</p>
               </div>
               <button className="browse-button inventory-refresh" onClick={refreshPhysicalSources} disabled={sourcesLoading} type="button">
                 {sourcesLoading ? 'Checking…' : 'List disks'} <span aria-hidden="true">↻</span>
@@ -317,7 +321,7 @@ function App() {
             </div>
             {sourceMessage && <p className="input-message" role="alert">{sourceMessage}</p>}
             {physicalSources && (physicalSources.length === 0 ? (
-              <p className="inventory-empty" aria-live="polite">No physical disks were reported by this system.</p>
+              <p className="inventory-empty" aria-live="polite">No confirmed external drives were reported by this system. Drives with unknown type stay hidden.</p>
             ) : (
               <div className="source-list" aria-live="polite">
                 {physicalSources.map((source) => (

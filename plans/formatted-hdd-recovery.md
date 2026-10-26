@@ -109,8 +109,10 @@ and safe export.
 2. [x] **Write an image safely.** Copy a bounded read-only source in chunks to a
    temporary file in the destination filesystem. Check free space first, report
    progress, cancel without publishing a partial image, and refuse overwrite.
-3. [x] **List physical sources safely.** Show available identity and mount details;
-   disable imaging when stable identity or required access is unavailable.
+3. [x] **List external sources safely.** List only drives confirmed as external
+   from native device metadata; hide internal and unknown devices, load the
+   external list on startup, and disable imaging when stable identity or
+   required access is unavailable.
 4. **Image a physical HDD.** Use a platform-specific privileged helper to
    confirm model, serial, and capacity, then revalidate the source and separate
    destination before imaging. Reopen the completed image in the inspection

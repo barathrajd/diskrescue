@@ -23,6 +23,8 @@ export type PhysicalSource = {
   mountStateKnown: boolean;
   systemStateKnown: boolean;
   isSystem: boolean;
+  externalStateKnown: boolean;
+  isExternal: boolean;
   mountPoints: string[];
   eligibilityReason: string | null;
 };

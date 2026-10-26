@@ -17,12 +17,18 @@ struct PhysicalSource {
     mount_state_known: bool,
     system_state_known: bool,
     is_system: bool,
+    external_state_known: bool,
+    is_external: bool,
     mount_points: Vec<String>,
     eligibility_reason: Option<String>,
 }
 
 fn source_imaging_blocker(source: &PhysicalSource) -> Option<&'static str> {
-    if source.id.trim().is_empty() {
+    if !source.external_state_known {
+        Some("External drive status unavailable")
+    } else if !source.is_external {
+        Some("Internal drive is locked")
+    } else if source.id.trim().is_empty() {
         Some("Device identifier unavailable")
     } else if source.model.as_deref().is_none_or(str::is_empty) {
         Some("Model unavailable")
@@ -51,6 +57,8 @@ fn make_physical_source(
     mount_state_known: bool,
     system_state_known: bool,
     is_system: bool,
+    external_state_known: bool,
+    is_external: bool,
     mount_points: Vec<String>,
 ) -> PhysicalSource {
     let mut source = PhysicalSource {
@@ -61,6 +69,8 @@ fn make_physical_source(
         mount_state_known,
         system_state_known,
         is_system,
+        external_state_known,
+        is_external,
         mount_points,
         eligibility_reason: None,
     };
@@ -99,6 +109,16 @@ fn parse_linux_sources(inventory: &str) -> Result<Vec<PhysicalSource>, String> {
         let is_system = mount_points
             .iter()
             .any(|mount| mount == "/" || mount == "/boot" || mount.starts_with("/boot/"));
+        let removable = disk.get("rm").and_then(serde_json::Value::as_bool);
+        let transport = json_string(disk, "tran").map(|value| value.to_ascii_lowercase());
+        let external_state_known = removable.is_some() || transport.is_some();
+        let is_external = removable == Some(true)
+            || transport.as_deref().is_some_and(|value| {
+                matches!(value, "usb" | "firewire" | "thunderbolt" | "sd" | "mmc")
+            });
+        if !external_state_known || !is_external {
+            continue;
+        }
         sources.push(make_physical_source(
             id,
             json_string(disk, "model"),
@@ -109,6 +129,8 @@ fn parse_linux_sources(inventory: &str) -> Result<Vec<PhysicalSource>, String> {
             linux_mount_state_known(disk),
             true,
             is_system,
+            external_state_known,
+            is_external,
             mount_points,
         ));
     }
@@ -170,6 +192,22 @@ fn parse_windows_sources(inventory: &str) -> Result<Vec<PhysicalSource>, String>
     let mut sources = Vec::new();
 
     for disk in disks {
+        let bus_type = json_string(disk, "BusType").map(|value| value.to_ascii_lowercase());
+        let external_state_known = bus_type.is_some()
+            || disk
+                .get("BusType")
+                .and_then(serde_json::Value::as_u64)
+                .is_some();
+        let is_external = bus_type
+            .as_deref()
+            .is_some_and(|value| matches!(value, "usb" | "sd" | "mmc" | "ieee1394" | "1394"))
+            || disk
+                .get("BusType")
+                .and_then(serde_json::Value::as_u64)
+                .is_some_and(|value| matches!(value, 7 | 12 | 13 | 15));
+        if !external_state_known || !is_external {
+            continue;
+        }
         let Some(number) = disk.get("Number").and_then(serde_json::Value::as_u64) else {
             continue;
         };
@@ -231,6 +269,8 @@ fn parse_windows_sources(inventory: &str) -> Result<Vec<PhysicalSource>, String>
             mount_state_known,
             system_state_known,
             is_system,
+            external_state_known,
+            is_external,
             mount_points,
         ));
     }
@@ -263,7 +303,7 @@ fn list_linux_sources() -> Result<Vec<PhysicalSource>, String> {
             "--bytes",
             "--tree",
             "--output",
-            "NAME,PATH,TYPE,SIZE,MODEL,SERIAL,MOUNTPOINTS",
+            "NAME,PATH,TYPE,SIZE,MODEL,SERIAL,MOUNTPOINTS,RM,TRAN",
         ])
         .output()
         .map_err(|_| "Could not start lsblk to list physical disks".to_owned())?;
@@ -277,7 +317,7 @@ fn list_linux_sources() -> Result<Vec<PhysicalSource>, String> {
 
 #[cfg(target_os = "windows")]
 fn list_windows_sources() -> Result<Vec<PhysicalSource>, String> {
-    const SCRIPT: &str = "$disks = Get-Disk | ForEach-Object { $disk = $_; $parts = @(); $partitionStateKnown = $true; try { $parts = @(Get-Partition -DiskNumber $disk.Number -ErrorAction Stop | Select-Object DriveLetter, AccessPaths) } catch { $partitionStateKnown = $false }; [pscustomobject]@{ Number = $disk.Number; FriendlyName = $disk.FriendlyName; SerialNumber = $disk.SerialNumber; Size = $disk.Size; IsBoot = $disk.IsBoot; IsSystem = $disk.IsSystem; PartitionStateKnown = $partitionStateKnown; Partitions = $parts } }; ConvertTo-Json -InputObject @($disks) -Depth 4 -Compress";
+    const SCRIPT: &str = "$disks = Get-Disk | ForEach-Object { $disk = $_; $parts = @(); $partitionStateKnown = $true; try { $parts = @(Get-Partition -DiskNumber $disk.Number -ErrorAction Stop | Select-Object DriveLetter, AccessPaths) } catch { $partitionStateKnown = $false }; [pscustomobject]@{ Number = $disk.Number; FriendlyName = $disk.FriendlyName; SerialNumber = $disk.SerialNumber; Size = $disk.Size; BusType = [string]$disk.BusType; IsBoot = $disk.IsBoot; IsSystem = $disk.IsSystem; PartitionStateKnown = $partitionStateKnown; Partitions = $parts } }; ConvertTo-Json -InputObject @($disks) -Depth 4 -Compress";
     let output = Command::new("powershell.exe")
         .args([
             "-NoLogo",
@@ -372,6 +412,14 @@ fn list_macos_sources() -> Result<Vec<PhysicalSource>, String> {
                     .and_then(plist::Value::as_unsigned_integer)
             })
             .unwrap_or(0);
+        let internal = dictionary
+            .and_then(|dictionary| dictionary.get("Internal"))
+            .and_then(plist::Value::as_boolean);
+        let external_state_known = internal.is_some();
+        let is_external = internal == Some(false);
+        if !external_state_known || !is_external {
+            continue;
+        }
         sources.push(make_physical_source(
             source_id.clone(),
             model,
@@ -381,6 +429,8 @@ fn list_macos_sources() -> Result<Vec<PhysicalSource>, String> {
             system_disk.is_some(),
             system_disk.as_deref() == Some(identifier)
                 || system_disk.as_deref() == Some(&source_id),
+            external_state_known,
+            is_external,
             mount_points,
         ));
     }
@@ -657,6 +707,8 @@ mod tests {
             mount_state_known: true,
             system_state_known: true,
             is_system: false,
+            external_state_known: true,
+            is_external: true,
             mount_points: Vec::new(),
             eligibility_reason: None,
         };
@@ -673,17 +725,29 @@ mod tests {
             source_imaging_blocker(&source),
             Some("Source is a system disk")
         );
+        source.is_system = false;
+        source.is_external = false;
+        assert_eq!(
+            source_imaging_blocker(&source),
+            Some("Internal drive is locked")
+        );
+        source.external_state_known = false;
+        assert_eq!(
+            source_imaging_blocker(&source),
+            Some("External drive status unavailable")
+        );
     }
 
     #[test]
     fn parses_linux_block_device_inventory_with_child_mounts() {
-        let inventory = r#"{"blockdevices":[{"name":"sdb","path":"/dev/sdb","type":"disk","size":1000,"model":"External HDD","serial":"SERIAL-B","rm":true,"mountpoints":[null],"children":[{"name":"sdb1","path":"/dev/sdb1","type":"part","size":1000,"mountpoints":["/media/user/RECOVERY"]}]}]}"#;
+        let inventory = r#"{"blockdevices":[{"name":"sda","path":"/dev/sda","type":"disk","size":5000,"model":"Internal SSD","serial":"SERIAL-A","rm":false,"tran":"sata","mountpoints":["/"]},{"name":"sdb","path":"/dev/sdb","type":"disk","size":1000,"model":"External HDD","serial":"SERIAL-B","rm":true,"tran":"usb","mountpoints":[null],"children":[{"name":"sdb1","path":"/dev/sdb1","type":"part","size":1000,"mountpoints":["/media/user/RECOVERY"]}]}]}"#;
 
         let sources = parse_linux_sources(inventory).unwrap();
 
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].id, "/dev/sdb");
         assert_eq!(sources[0].serial.as_deref(), Some("SERIAL-B"));
+        assert!(sources[0].is_external);
         assert_eq!(sources[0].mount_points, ["/media/user/RECOVERY"]);
         assert_eq!(
             source_imaging_blocker(&sources[0]),
@@ -692,8 +756,14 @@ mod tests {
     }
 
     #[test]
+    fn hides_linux_disks_when_external_status_is_unknown() {
+        let inventory = r#"{"blockdevices":[{"name":"sdz","type":"disk","size":1000,"model":"Unclassified disk","mountpoints":[null]}]}"#;
+        assert!(parse_linux_sources(inventory).unwrap().is_empty());
+    }
+
+    #[test]
     fn parses_windows_disk_inventory_and_system_flags() {
-        let inventory = r#"{"Number":2,"FriendlyName":"External HDD","SerialNumber":"SERIAL-C","Size":2000,"IsBoot":false,"IsSystem":true,"Partitions":[{"DriveLetter":"E"}]}"#;
+        let inventory = r#"[{"Number":0,"FriendlyName":"Internal SSD","SerialNumber":"SERIAL-I","Size":4000,"BusType":"NVMe","IsBoot":true,"IsSystem":true,"Partitions":[{"DriveLetter":"C"}]},{"Number":2,"FriendlyName":"External HDD","SerialNumber":"SERIAL-C","Size":2000,"BusType":"USB","IsBoot":false,"IsSystem":true,"Partitions":[{"DriveLetter":"E"}]}]"#;
 
         let sources = parse_windows_sources(inventory).unwrap();
 
@@ -701,17 +771,21 @@ mod tests {
         assert_eq!(sources[0].id, "PhysicalDrive2");
         assert_eq!(sources[0].serial.as_deref(), Some("SERIAL-C"));
         assert!(sources[0].is_system);
+        assert!(sources[0].is_external);
         assert_eq!(
             source_imaging_blocker(&sources[0]),
             Some("Source is a system disk")
         );
 
-        let inventory_without_partition_state = r#"{"Number":3,"FriendlyName":"Unknown HDD","SerialNumber":"SERIAL-D","Size":3000,"IsBoot":false,"IsSystem":false,"PartitionStateKnown":false,"Partitions":[]}"#;
+        let inventory_without_partition_state = r#"{"Number":3,"FriendlyName":"External HDD","SerialNumber":"SERIAL-D","Size":3000,"BusType":"USB","IsBoot":false,"IsSystem":false,"PartitionStateKnown":false,"Partitions":[]}"#;
         let unknown_mount = parse_windows_sources(inventory_without_partition_state).unwrap();
         assert_eq!(
             source_imaging_blocker(&unknown_mount[0]),
             Some("Mount state unavailable")
         );
+
+        let unknown_bus_type = r#"{"Number":4,"FriendlyName":"Unclassified disk","SerialNumber":"SERIAL-E","Size":4000,"IsBoot":false,"IsSystem":false,"Partitions":[]}"#;
+        assert!(parse_windows_sources(unknown_bus_type).unwrap().is_empty());
     }
 
     fn temporary_image_path() -> PathBuf {
